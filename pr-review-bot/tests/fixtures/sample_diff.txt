@@ -1,0 +1,20 @@
+diff --git a/src/auth/login.py b/src/auth/login.py
+index abc1234..def5678 100644
+--- a/src/auth/login.py
++++ b/src/auth/login.py
+@@ -10,6 +10,15 @@ from database import get_db
+ 
+ router = APIRouter()
+ 
++@router.post("/login")
++async def login(username: str, password: str):
++    db = get_db()
++    query = f"SELECT * FROM users WHERE username = '{username}' AND password = '{password}'"
++    user = db.execute(query).fetchone()
++    if user:
++        token = create_token(user["id"])
++        return {"token": token}
++    raise HTTPException(status_code=401, detail="Invalid credentials")
+ 
+ @router.post("/register")
+ async def register(user_data: UserCreate):
