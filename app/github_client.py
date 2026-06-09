@@ -46,7 +46,7 @@ def get_installation_token(
         return _token_cache["token"]
 
     # 1. Sign a JWT with the app's private key
-    jwt_payload = {"iat": now - 60, "exp": now + 600, "iss": app_id}
+    jwt_payload = {"iat": now - 60, "exp": now + 600, "iss": str(app_id)}
     jwt_token = jwt.encode(jwt_payload, private_key_pem, algorithm="RS256")
 
     # 2. Exchange JWT for an installation access token

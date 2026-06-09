@@ -5,10 +5,9 @@ from __future__ import annotations
 import hashlib
 import hmac
 
-from app.github_client import annotate_diff, _format_comment
+from app.github_client import _format_comment, annotate_diff
 from app.main import verify_signature
 from app.models import CommentThread
-
 
 # ────────────────────────────────────────────────────────────────
 # Webhook signature verification

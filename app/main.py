@@ -37,6 +37,7 @@ from app.review_engine import count_tokens, review_diff, truncate_diff
 
 logger = logging.getLogger(__name__)
 
+# Force uvicorn config reload to fetch new .env variables
 app = FastAPI(
     title="PR Review Bot",
     description="AI-powered GitHub PR code review bot",
@@ -45,7 +46,10 @@ app = FastAPI(
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173", "http://127.0.0.1:5173"],
+    allow_origins=[
+        "http://localhost:5173",
+        "http://127.0.0.1:5173",
+    ],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -111,6 +115,16 @@ def _effective_settings(settings: Settings) -> dict[str, object]:
         "llm_api_key": settings.llm_api_key,
     }
     return {**base, **_runtime_overrides}
+
+
+def _resolved_settings(settings: Settings) -> Settings:
+    """
+    Build a Settings object that reflects any dashboard runtime overrides.
+
+    The dashboard config panel updates in-memory overrides, and webhook review
+    execution should honor those values instead of only the original .env file.
+    """
+    return settings.model_copy(update=_effective_settings(settings))
 
 
 def _today_key(offset_days: int = 0) -> str:
@@ -358,6 +372,7 @@ async def handle_webhook(
 ) -> dict[str, str]:
     settings = get_settings()
     effective = _effective_settings(settings)
+    resolved_settings = _resolved_settings(settings)
     body = await request.body()
 
     if not verify_signature(body, x_hub_signature_256, settings.github_webhook_secret):
@@ -371,10 +386,25 @@ async def handle_webhook(
         _add_webhook_log("unknown", x_github_event, "unknown", "ignored", "event filtered")
         return {"status": "ignored", "reason": f"event type: {x_github_event}"}
 
+    pr = payload["pull_request"]
+    owner = payload["repository"]["owner"]["login"]
+    repo_name = payload["repository"]["name"]
     action = payload.get("action", "")
-    if action not in ("opened", "synchronize"):
+    pull_number = pr["number"]
+    commit_sha = pr["head"]["sha"]
+    pr_title = pr.get("title", "")
+    pr_body = pr.get("body", "") or ""
+
+    repo_key = f"{owner}/{repo_name}"
+    reviewable_actions = {"opened", "synchronize", "reopened", "ready_for_review"}
+    if action == "closed":
+        reason = "merged PR does not trigger review" if pr.get("merged") else "PR closed without merge"
+        _add_webhook_log(repo_key, x_github_event, action, "ignored", reason)
+        return {"status": "ignored", "reason": reason}
+
+    if action not in reviewable_actions:
         _add_webhook_log(
-            f"{payload['repository']['owner']['login']}/{payload['repository']['name']}",
+            repo_key,
             x_github_event,
             action,
             "ignored",
@@ -382,15 +412,14 @@ async def handle_webhook(
         )
         return {"status": "ignored", "reason": f"action: {action}"}
 
-    pr = payload["pull_request"]
-    owner = payload["repository"]["owner"]["login"]
-    repo_name = payload["repository"]["name"]
-    pull_number = pr["number"]
-    commit_sha = pr["head"]["sha"]
-    pr_title = pr.get("title", "")
-    pr_body = pr.get("body", "") or ""
-
-    repo_key = f"{owner}/{repo_name}"
+    logger.info(
+        "Webhook received for %s#%d — event=%s action=%s commit=%s",
+        repo_key,
+        pull_number,
+        x_github_event,
+        action,
+        commit_sha[:8],
+    )
     key = _review_key(commit_sha, pull_number)
     if key in _seen_reviews:
         _add_webhook_log(repo_key, x_github_event, action, "skipped", "already reviewed")
@@ -405,49 +434,60 @@ async def handle_webhook(
         _add_webhook_log(repo_key, x_github_event, action, "skipped", "rate limited")
         return {"status": "skipped", "reason": "rate limited"}
 
-    private_key = settings.github_private_key_path.read_text()
-    token = get_installation_token(
-        settings.github_app_id,
-        private_key,
-        settings.github_installation_id,
-    )
+    try:
+        private_key = settings.github_private_key_path.read_text()
+        token = get_installation_token(
+            settings.github_app_id,
+            private_key,
+            settings.github_installation_id,
+        )
 
-    raw_diff = await fetch_pr_diff(owner, repo_name, pull_number, token)
-    diff = annotate_diff(raw_diff)
+        raw_diff = await fetch_pr_diff(owner, repo_name, pull_number, token)
+        diff = annotate_diff(raw_diff)
 
-    diff, was_truncated = truncate_diff(diff, int(effective["diff_token_limit"]))
-    if was_truncated:
-        logger.warning("PR diff was truncated for %s#%d", repo_key, pull_number)
+        diff, was_truncated = truncate_diff(diff, int(effective["diff_token_limit"]))
+        if was_truncated:
+            logger.warning("PR diff was truncated for %s#%d", repo_key, pull_number)
 
-    result = await review_diff(diff, settings, pr_title=pr_title, pr_body=pr_body)
+        result = await review_diff(
+            diff,
+            resolved_settings,
+            pr_title=pr_title,
+            pr_body=pr_body,
+        )
 
-    await post_review_safe(owner, repo_name, pull_number, commit_sha, result, token)
-    await set_label(owner, repo_name, pull_number, result.verdict, token)
+        await post_review_safe(owner, repo_name, pull_number, commit_sha, result, token)
+        await set_label(owner, repo_name, pull_number, result.verdict, token)
 
-    review_id = str(uuid4())
-    review_entry = ReviewDetail(
-        id=review_id,
-        repo=repo_key,
-        pr_number=pull_number,
-        verdict=result.verdict,
-        comments_count=len(result.comments),
-        summary=result.summary,
-        provider=str(effective["llm_provider"]),
-        model=str(effective["llm_model"]),
-        created_at=datetime.now(UTC),
-        pull_request_title=pr_title,
-        pull_request_body=pr_body,
-        comments=[comment.model_dump() for comment in result.comments],
-    )
-    _review_feed.insert(0, review_entry)
-    del _review_feed[200:]
+        review_id = str(uuid4())
+        review_entry = ReviewDetail(
+            id=review_id,
+            repo=repo_key,
+            pr_number=pull_number,
+            verdict=result.verdict,
+            comments_count=len(result.comments),
+            summary=result.summary,
+            provider=str(effective["llm_provider"]),
+            model=str(effective["llm_model"]),
+            created_at=datetime.now(UTC),
+            pull_request_title=pr_title,
+            pull_request_body=pr_body,
+            comments=[comment.model_dump() for comment in result.comments],
+        )
+        _review_feed.insert(0, review_entry)
+        del _review_feed[200:]
 
-    token_count = count_tokens(raw_diff)
-    day = _today_key()
-    _cost_metrics[day]["token_usage"] += token_count
-    _cost_metrics[day]["estimated_cost_usd"] += token_count * 0.000003
-    _cost_metrics[day]["reviews"] += 1
+        token_count = count_tokens(raw_diff)
+        day = _today_key()
+        _cost_metrics[day]["token_usage"] += token_count
+        _cost_metrics[day]["estimated_cost_usd"] += token_count * 0.000003
+        _cost_metrics[day]["reviews"] += 1
 
-    _add_webhook_log(repo_key, x_github_event, action, "processed")
-    logger.info("Review complete for %s#%d — verdict: %s", repo_key, pull_number, result.verdict)
-    return {"status": "reviewed", "verdict": result.verdict}
+        _add_webhook_log(repo_key, x_github_event, action, "processed")
+        logger.info("Review complete for %s#%d — verdict: %s", repo_key, pull_number, result.verdict)
+        return {"status": "reviewed", "verdict": result.verdict}
+    except Exception as exc:
+        _seen_reviews.discard(key)
+        logger.exception("Review failed for %s#%d", repo_key, pull_number)
+        _add_webhook_log(repo_key, x_github_event, action, "failed", str(exc))
+        raise

@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-from pathlib import Path
 
 from app.models import ReviewResult
 from app.review_engine import (
@@ -12,7 +11,6 @@ from app.review_engine import (
     load_system_prompt,
     truncate_diff,
 )
-
 
 # ────────────────────────────────────────────────────────────────
 # Prompt loading

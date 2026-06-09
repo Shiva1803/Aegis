@@ -7,3 +7,9 @@ __pycache__/
 .pytest_cache/
 dist/
 *.egg-info/
+howtodeploy.md
+howtorun.md
+move_to_root.sh
+pr_review_bot_flow.svg
+build_steps.md
+basicinfo.docx

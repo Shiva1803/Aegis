@@ -1,6 +1,6 @@
-# PR Review Bot
+# Aegis: PR Review Bot
 
-AI-powered GitHub PR code review bot that automatically reviews pull requests using AI Models (Claude, Gemini, GPT etc.)
+Aegis is an AI-powered GitHub PR code review bot that automatically reviews pull requests using AI Models (Claude, Gemini, GPT etc.)
 
 ## What It Does
 
