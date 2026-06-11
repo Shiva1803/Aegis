@@ -84,10 +84,31 @@ class Settings(BaseSettings):
     def resolved_private_key(self) -> str:
         """Return PEM key contents from env var or file, preferring the env var."""
         if self.github_private_key.strip():
-            # Render/Heroku store newlines as literal '\n' — convert them
-            key = self.github_private_key.replace("\\n", "\n")
-            return key
+            return self._normalize_pem(self.github_private_key)
         return self.github_private_key_path.read_text()
+
+    @staticmethod
+    def _normalize_pem(raw: str) -> str:
+        """Normalize a PEM key that may be mangled by env var storage."""
+        key = raw.strip()
+        # Remove surrounding quotes if present
+        if (key.startswith('"') and key.endswith('"')) or \
+           (key.startswith("'") and key.endswith("'")):
+            key = key[1:-1]
+        # Replace literal \n (two chars) with actual newlines
+        key = key.replace("\\n", "\n")
+        # If the key is still a single line, try to reconstruct proper PEM format
+        if "\n" not in key.strip():
+            # Extract header, body, footer and rebuild with proper line breaks
+            key = key.replace("-----BEGIN RSA PRIVATE KEY-----", "-----BEGIN RSA PRIVATE KEY-----\n")
+            key = key.replace("-----END RSA PRIVATE KEY-----", "\n-----END RSA PRIVATE KEY-----")
+            key = key.replace("-----BEGIN PRIVATE KEY-----", "-----BEGIN PRIVATE KEY-----\n")
+            key = key.replace("-----END PRIVATE KEY-----", "\n-----END PRIVATE KEY-----")
+        # Ensure final newline
+        if not key.endswith("\n"):
+            key += "\n"
+        logger.debug("PEM key loaded: starts with '%s', length=%d", key[:30], len(key))
+        return key
 
 
 # ── Key roulette ────────────────────────────────────────────────
