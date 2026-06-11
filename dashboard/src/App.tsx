@@ -123,6 +123,7 @@ export function App() {
           <div className="logo-container">
             <img src="/Gemini_Generated_Image_fxx9lqfxx9lqfxx9.png" alt="Aegis Logo" className="logo-img" />
             <span className="logo-text">Aegis</span>
+            <span className="logo-version">v1.1</span>
           </div>
         </div>
 

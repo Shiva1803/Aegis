@@ -106,6 +106,53 @@ body { font-family: "Manrope", sans-serif; background: #02030a; color: #eef1ff; 
   padding: 0.25rem 0.75rem 0.25rem 0.4rem;
   height: 34px;
   box-shadow: 0 0 1px 1px rgba(255, 255, 255, 0.05) inset;
+  cursor: pointer;
+  
+  /* Fallback timing function: clean spring curve */
+  transition: all 0.6s cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+
+@supports (animation-timing-function: linear(0, 1)) {
+  .logo-container {
+    --spring-easing: linear(0, 0.016 0.5%, 0.06 1%, 0.226 2%, 1.116 5.4%, 1.375 6.6%, 1.527 7.7%, 1.565 8.2%, 1.585 8.8%, 1.581 9.3%, 1.559 9.8%, 1.458 10.9%, 0.937 14.3%, 0.784 15.5%, 0.693 16.6%, 0.67 17.1%, 0.657 17.7%, 0.671 18.7%, 0.729 19.8%, 1.042 23.3%, 1.13 24.5%, 1.182 25.6%, 1.201 26.7%, 1.192 27.7%, 1.156 28.8%, 0.977 32.2%, 0.925 33.4%, 0.894 34.5%, 0.882 35.6%, 0.887 36.6%, 0.907 37.7%, 1.045 42.4%, 1.069 44.5%, 1.059 46.3%, 0.979 50.9%, 0.96 53.4%, 0.966 55.3%, 1.013 59.9%, 1.024 62.3%, 0.986 71.2%, 1.008 79.9%, 0.995 88.9%, 1);
+    transition-timing-function: var(--spring-easing);
+  }
+}
+
+.logo-container:hover {
+  background: rgba(20, 28, 54, 0.75);
+  border-color: rgba(249, 115, 22, 0.4);
+  box-shadow: 0 0 12px rgba(249, 115, 22, 0.2), 0 0 1px 1px rgba(255, 255, 255, 0.08) inset;
+  transform: scale(1.03);
+  padding: 0.25rem 0.9rem 0.25rem 0.4rem; /* expand padding on right */
+}
+
+.logo-version {
+  font-size: 0.66rem;
+  font-weight: 700;
+  color: #fdba74; /* Warm yellow/amber accent */
+  opacity: 0;
+  max-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  letter-spacing: 0.02em;
+  margin-left: 0;
+  
+  /* Fallback timing function: clean spring curve */
+  transition: max-width 0.6s cubic-bezier(0.34, 1.56, 0.64, 1), opacity 0.4s ease, margin-left 0.6s cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+
+@supports (animation-timing-function: linear(0, 1)) {
+  .logo-version {
+    --spring-easing: linear(0, 0.016 0.5%, 0.06 1%, 0.226 2%, 1.116 5.4%, 1.375 6.6%, 1.527 7.7%, 1.565 8.2%, 1.585 8.8%, 1.581 9.3%, 1.559 9.8%, 1.458 10.9%, 0.937 14.3%, 0.784 15.5%, 0.693 16.6%, 0.67 17.1%, 0.657 17.7%, 0.671 18.7%, 0.729 19.8%, 1.042 23.3%, 1.13 24.5%, 1.182 25.6%, 1.201 26.7%, 1.192 27.7%, 1.156 28.8%, 0.977 32.2%, 0.925 33.4%, 0.894 34.5%, 0.882 35.6%, 0.887 36.6%, 0.907 37.7%, 1.045 42.4%, 1.069 44.5%, 1.059 46.3%, 0.979 50.9%, 0.96 53.4%, 0.966 55.3%, 1.013 59.9%, 1.024 62.3%, 0.986 71.2%, 1.008 79.9%, 0.995 88.9%, 1);
+    transition-timing-function: var(--spring-easing);
+  }
+}
+
+.logo-container:hover .logo-version {
+  opacity: 1;
+  max-width: 40px; /* enough to reveal "v1.1" */
+  margin-left: 0.25rem;
 }
 
 .logo-img {
