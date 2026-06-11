@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { api } from "./lib/api";
 import type { AuditEntry, AuthStatus, ConfigView, CostSummary, ReviewDetail, ReviewFeedItem, WebhookLog } from "./lib/types";
 
-type TabKey = "feed" | "detail" | "config" | "cost" | "webhooks";
+type TabKey = "feed" | "detail" | "config" | "cost" | "webhooks" | "about";
 
 const tabs: Array<{ key: TabKey; label: string }> = [
   { key: "feed", label: "Live Feed" },
@@ -235,7 +235,7 @@ export function App() {
             {detail ? (
               <>
                 <h3 className="detail-subject">{detail.pull_request_title}</h3>
-                
+
                 {/* AI Summary Block */}
                 <div className="ai-summary-block">
                   <div className="ai-summary-header">
@@ -263,7 +263,7 @@ export function App() {
                             <span className="file-path">{comment.file}</span>
                             <span className="file-line">Line {comment.line}</span>
                           </div>
-                          
+
                           <div className="feedback-badges">
                             <span className={`badge-severity severity-${comment.severity}`}>
                               {comment.severity}
@@ -273,7 +273,7 @@ export function App() {
                             </span>
                           </div>
                         </div>
-                        
+
                         <div className="feedback-card-body">
                           <p>{comment.body}</p>
                         </div>
@@ -312,7 +312,7 @@ export function App() {
                 Save Changes
               </button>
             </div>
-            
+
             {auth.user?.role !== "admin" ? <p className="warn">Sign in as admin to edit config.</p> : null}
             {saveError ? <p className="warn">{saveError}</p> : null}
 
@@ -326,7 +326,7 @@ export function App() {
                   </svg>
                   AI Model Details
                 </h3>
-                
+
                 <div className="config-field">
                   <span className="config-label">Provider</span>
                   <select
@@ -363,11 +363,11 @@ export function App() {
                   >
                     {(PROVIDER_MODELS[config.llm_provider] || []).includes(config.llm_model)
                       ? (PROVIDER_MODELS[config.llm_provider] || []).map((model) => (
-                          <option key={model} value={model}>{model}</option>
-                        ))
+                        <option key={model} value={model}>{model}</option>
+                      ))
                       : [config.llm_model, ...(PROVIDER_MODELS[config.llm_provider] || [])].map((model) => (
-                          <option key={model} value={model}>{model}</option>
-                        ))
+                        <option key={model} value={model}>{model}</option>
+                      ))
                     }
                   </select>
                 </div>
@@ -552,7 +552,7 @@ export function App() {
                 <span className="cost-card-subtext">Estimated per review run</span>
               </div>
             </div>
-            
+
             <div className="chart-container">
               {/* Background grid lines to give the chart visual substance */}
               <div className="chart-grid-lines">
@@ -560,15 +560,15 @@ export function App() {
                 <div className="grid-line"><span>{Math.round(maxTokens / 2).toLocaleString()}</span></div>
                 <div className="grid-line"><span>0</span></div>
               </div>
-              
+
               <div className="chart-bars">
                 {cost.last_7_days.map((day) => {
                   const percent = maxTokens > 0 ? (day.token_usage / maxTokens) * 100 : 0;
                   return (
                     <div key={day.date} className="chart-bar-col">
                       <div className="chart-bar-wrapper">
-                        <div 
-                          className="chart-bar" 
+                        <div
+                          className="chart-bar"
                           style={{ height: `${percent}%` }}
                         >
                           <div className="chart-bar-tooltip">
@@ -603,17 +603,61 @@ export function App() {
             </div>
           </div>
         )}
+
+        {activeTab === "about" && (
+          <div className="panel about-panel">
+            <div className="about-section">
+              <h2 className="about-heading">What is Aegis?</h2>
+              <p className="about-paragraph">
+                Aegis is an intelligent, cinematic code review command center designed to bring deep AI synthesis and telemetry to modern software workflows. By bridging the gap between automated repository operations and large language models, Aegis acts as a persistent watchdog, ensuring that every code change is thoroughly inspected, documented, and scored before reaching your main production branches.
+              </p>
+            </div>
+
+            <div className="about-section">
+              <h2 className="about-heading">Key Capabilities</h2>
+              <p className="about-paragraph">
+                Aegis monitors incoming webhook payloads from GitHub for pull request activity. Upon receipt, it performs semantic analysis on the code diff using your designated LLM provider. The engine automatically identifies bugs, style violations, security issues, and architectural concerns, generating formatted markdown comments directly back to the pull request in real time.
+              </p>
+            </div>
+
+            <div className="about-section">
+              <h2 className="about-heading">Telemetry & Control</h2>
+              <p className="about-paragraph">
+                Managing AI usage at scale requires precision. Aegis provides full token cost tracking and telemetry over a rolling seven-day window, giving engineering teams transparent visibility into API expenditures. Additionally, features like Key Roulette distribute API load across multiple backup keys, ensuring high availability and robust rate limits.
+              </p>
+            </div>
+
+            <div className="about-section">
+              <h2 className="about-heading">Getting Started</h2>
+              <p className="about-paragraph">
+                To activate automated code reviews, configure your GitHub App or Repository settings to send Webhook deliveries to the Aegis server gateway URL. Ensure you have provided a valid API key for your chosen provider (NVIDIA NIM, Groq, OpenAI, Anthropic, or Gemini) in the Configuration panel. Once set up, Aegis will handle the rest autonomously.
+              </p>
+              <div className="about-meta-info">
+                <div>Aegis: V 1.1</div>
+                <div>Last Updated: 11 Jun 2026</div>
+              </div>
+            </div>
+          </div>
+        )}
       </section>
       <footer className="hero-footer">
         <div className="footer-left">
-          <span>Built by <a href="https://shivanshtripathi.vercel.app" target="_blank" rel="noreferrer">Shivansh Tripathi</a></span>
+          <a href="#" onClick={(event) => { event.preventDefault(); setActiveTab("about"); }} className="about-link">
+            <svg className="menu-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <circle cx="12" cy="12" r="10" />
+              <line x1="12" y1="16" x2="12" y2="12" />
+              <line x1="12" y1="8" x2="12.01" y2="8" />
+            </svg>
+            About Aegis
+          </a>
         </div>
         <div className="footer-right">
-          <a href="#" onClick={(event) => event.preventDefault()}>
+          <span>Built by <a href="https://shivanshtripathi.vercel.app" target="_blank" rel="noreferrer">Shivansh Tripathi</a></span>
+          <span className="footer-separator">|</span>
+          <a href="https://github.com/Shiva1803/Aegis" target="_blank" rel="noreferrer" title="GitHub Project" aria-label="GitHub Project">
             <svg className="menu-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
               <path d="M9 19c-5 1.5-5-2.5-7-3m14 6v-3.87a3.37 3.37 0 0 0-.94-2.61c3.14-.35 6.44-1.54 6.44-7A5.44 5.44 0 0 0 20 4.77 5.07 5.07 0 0 0 19.91 1S18.73.65 16 2.48a13.38 13.38 0 0 0-7 0C6.27.65 5.09 1 5.09 1A5.07 5.07 0 0 0 5 4.77a5.44 5.44 0 0 0-1.5 3.78c0 5.42 3.3 6.61 6.44 7A3.37 3.37 0 0 0 9 18.13V22" />
             </svg>
-            GitHub Project
           </a>
         </div>
       </footer>
