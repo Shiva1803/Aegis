@@ -35,12 +35,14 @@ class Settings(BaseSettings):
     github_webhook_secret: str = ""
     github_app_id: int = 0
     github_private_key_path: Path = Path("./private-key.pem")
+    github_private_key: str = ""  # Alternative: paste PEM contents directly
     github_installation_id: int = 0
     github_oauth_client_id: str = ""
     github_oauth_client_secret: str = ""
     github_oauth_redirect_uri: str = "http://127.0.0.1:8000/auth/github/callback"
     dashboard_session_secret: str = "change-me-local-dev-secret"
     dashboard_admin_users: str = ""
+    frontend_url: str = "http://127.0.0.1:5173"
 
     # ── LLM configuration ───────────────────────────────────────
     llm_provider: Literal["anthropic", "openai", "groq", "gemini", "nvidia_nim"] = "anthropic"
@@ -77,6 +79,13 @@ class Settings(BaseSettings):
     @property
     def admin_users(self) -> set[str]:
         return {user.strip().lower() for user in self.dashboard_admin_users.split(",") if user.strip()}
+
+    @property
+    def resolved_private_key(self) -> str:
+        """Return PEM key contents from env var or file, preferring the env var."""
+        if self.github_private_key.strip():
+            return self.github_private_key
+        return self.github_private_key_path.read_text()
 
 
 # ── Key roulette ────────────────────────────────────────────────

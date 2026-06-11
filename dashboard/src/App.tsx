@@ -192,7 +192,7 @@ export function App() {
                 )}
               </div>
             ) : (
-              <a className="ghost" href="http://127.0.0.1:8000/auth/github/login">Connect GitHub</a>
+              <a className="ghost" href={`${import.meta.env.VITE_API_URL || ""}/auth/github/login`}>Connect GitHub</a>
             )}
           </div>
         </div>

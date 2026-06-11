@@ -1,7 +1,9 @@
 import type { AuditEntry, AuthStatus, ConfigView, CostSummary, ReviewDetail, ReviewFeedItem, WebhookLog } from "./types";
 
+const BASE_URL = import.meta.env.VITE_API_URL || "";
+
 async function get<T>(path: string): Promise<T> {
-  const response = await fetch(path, { credentials: "include" });
+  const response = await fetch(`${BASE_URL}${path}`, { credentials: "include" });
   if (!response.ok) {
     throw new Error(`Request failed: ${response.status}`);
   }
@@ -20,7 +22,7 @@ export const api = {
   getWebhooks: () => get<WebhookLog[]>("/api/dashboard/webhooks"),
   getAudit: () => get<AuditEntry[]>("/api/dashboard/audit"),
   updateConfig: async (payload: Partial<ConfigView>) => {
-    const response = await fetch("/api/dashboard/config", {
+    const response = await fetch(`${BASE_URL}/api/dashboard/config`, {
       method: "PATCH",
       credentials: "include",
       headers: { "Content-Type": "application/json" },
@@ -31,9 +33,9 @@ export const api = {
     }
     return response.json() as Promise<ConfigView>;
   },
-  getAuthStatus: () => get<AuthStatus>("/auth/status"),
+  getAuthStatus: () => get<AuthStatus>(`/auth/status`),
   logout: async () => {
-    const response = await fetch("/auth/logout", {
+    const response = await fetch(`${BASE_URL}/auth/logout`, {
       method: "POST",
       credentials: "include"
     });

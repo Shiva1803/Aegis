@@ -7,13 +7,15 @@ import secrets
 import time
 from collections import defaultdict
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 from urllib.parse import urlencode
 from uuid import uuid4
 
 import httpx
 from fastapi import FastAPI, Header, HTTPException, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import RedirectResponse
+from fastapi.responses import FileResponse, RedirectResponse
+from fastapi.staticfiles import StaticFiles
 
 from app.config import Settings, get_settings
 from app.dashboard_models import (
@@ -44,12 +46,17 @@ app = FastAPI(
     version="0.1.0",
 )
 
+settings_for_cors = get_settings()
+_cors_origins = [
+    "http://localhost:5173",
+    "http://127.0.0.1:5173",
+]
+if settings_for_cors.frontend_url and settings_for_cors.frontend_url not in _cors_origins:
+    _cors_origins.append(settings_for_cors.frontend_url)
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "http://localhost:5173",
-        "http://127.0.0.1:5173",
-    ],
+    allow_origins=_cors_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -265,7 +272,7 @@ async def github_callback(code: str = "", state: str = "") -> RedirectResponse:
         "role": role,
     }
 
-    response = RedirectResponse(url="http://127.0.0.1:5173/")
+    response = RedirectResponse(url=f"{settings.frontend_url}/")
     response.set_cookie(
         key="dashboard_session",
         value=session_token,
@@ -435,7 +442,7 @@ async def handle_webhook(
         return {"status": "skipped", "reason": "rate limited"}
 
     try:
-        private_key = settings.github_private_key_path.read_text()
+        private_key = settings.resolved_private_key
         token = get_installation_token(
             settings.github_app_id,
             private_key,
@@ -491,3 +498,18 @@ async def handle_webhook(
         logger.exception("Review failed for %s#%d", repo_key, pull_number)
         _add_webhook_log(repo_key, x_github_event, action, "failed", str(exc))
         raise
+
+
+# ── Serve dashboard static files in production ──────────────────
+_dashboard_dir = Path(__file__).resolve().parent.parent / "dashboard_static"
+if _dashboard_dir.is_dir():
+    app.mount("/assets", StaticFiles(directory=str(_dashboard_dir / "assets")), name="static-assets")
+
+    # Serve any top-level static files (favicon, videos, images, etc.)
+    @app.get("/{file_path:path}")
+    async def serve_spa(file_path: str) -> FileResponse:
+        """Serve the React SPA — any non-API route returns index.html."""
+        candidate = _dashboard_dir / file_path
+        if file_path and candidate.is_file():
+            return FileResponse(str(candidate))
+        return FileResponse(str(_dashboard_dir / "index.html"))

@@ -22,6 +22,7 @@ def _settings() -> SimpleNamespace:
         rate_limit_window_seconds=60,
         rate_limit_max_reviews=3,
         github_private_key_path=SimpleNamespace(read_text=lambda: "pem"),
+        github_private_key="",
         github_app_id=1,
         github_installation_id=2,
         github_oauth_client_id="",
@@ -29,6 +30,7 @@ def _settings() -> SimpleNamespace:
         github_oauth_redirect_uri="http://127.0.0.1:8000/auth/github/callback",
         dashboard_session_secret="test-secret",
         dashboard_admin_users="",
+        frontend_url="http://127.0.0.1:5173",
         llm_provider="nvidia_nim",
         llm_model="deepseek-ai/deepseek-v4-pro",
         key_roulette_enabled=False,
@@ -37,6 +39,7 @@ def _settings() -> SimpleNamespace:
         nvidia_nim_base_url="https://integrate.api.nvidia.com/v1",
         nvidia_nim_disable_thinking=True,
         admin_users=set(),
+        resolved_private_key="pem",
         model_copy=lambda update: SimpleNamespace(**{**_settings().__dict__, **update}),
     )
 

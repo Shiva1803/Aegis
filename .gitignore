@@ -3,6 +3,7 @@
 private-key.pem
 __pycache__/
 *.pyc
+node_modules/
 .ruff_cache/
 .pytest_cache/
 dist/
