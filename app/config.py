@@ -84,7 +84,9 @@ class Settings(BaseSettings):
     def resolved_private_key(self) -> str:
         """Return PEM key contents from env var or file, preferring the env var."""
         if self.github_private_key.strip():
-            return self.github_private_key
+            # Render/Heroku store newlines as literal '\n' — convert them
+            key = self.github_private_key.replace("\\n", "\n")
+            return key
         return self.github_private_key_path.read_text()
 
 
