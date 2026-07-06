@@ -17,13 +17,14 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 
-from app.config import Settings, get_settings
+from app.config import Settings, get_api_key_health_snapshot, get_settings
 from app.dashboard_models import (
     AuditEntry,
     ConfigUpdate,
     ConfigView,
     CostPoint,
     CostSummary,
+    KeyHealthView,
     ReviewDetail,
     ReviewFeedItem,
     WebhookLogEntry,
@@ -35,7 +36,7 @@ from app.github_client import (
     post_review_safe,
     set_label,
 )
-from app.review_engine import count_tokens, review_diff, truncate_diff
+from app.review_engine import TokenUsage, count_tokens, review_diff, truncate_diff
 
 logger = logging.getLogger(__name__)
 
@@ -66,9 +67,49 @@ _seen_reviews: set[str] = set()
 _rate_limit_log: dict[str, list[float]] = defaultdict(list)
 _review_feed: list[ReviewDetail] = []
 _webhook_logs: list[WebhookLogEntry] = []
-_cost_metrics: dict[str, dict[str, float]] = defaultdict(
-    lambda: {"token_usage": 0.0, "estimated_cost_usd": 0.0, "reviews": 0.0}
+_cost_metrics: dict[str, dict[str, dict[str, float]]] = defaultdict(
+    lambda: defaultdict(
+        lambda: {
+            "token_usage": 0.0,
+            "input_tokens": 0.0,
+            "output_tokens": 0.0,
+            "estimated_cost_usd": 0.0,
+            "reviews": 0.0,
+        }
+    )
 )
+
+# ── Per-model pricing (USD per 1 million tokens) ────────────────
+# (input_rate, output_rate) — update as providers change pricing.
+_MODEL_PRICING: dict[str, tuple[float, float]] = {
+    # Groq — free tier
+    "llama-3.3-70b-versatile":      (0.0, 0.0),
+    "llama-3.1-8b-instant":         (0.0, 0.0),
+    "mixtral-8x7b-32768":           (0.0, 0.0),
+    # OpenAI
+    "gpt-4o":                       (2.50, 10.00),
+    "gpt-4o-mini":                  (0.15, 0.60),
+    "gpt-4-turbo":                  (10.00, 30.00),
+    # Anthropic
+    "claude-sonnet-4-20250514":     (3.00, 15.00),
+    "claude-3-5-sonnet-20241022":   (3.00, 15.00),
+    "claude-3-haiku-20240307":      (0.25, 1.25),
+    # Google Gemini
+    "gemini-2.5-flash":             (0.15, 0.60),
+    "gemini-2.5-pro":               (1.25, 10.00),
+    "gemini-2.0-flash":             (0.10, 0.40),
+    # NVIDIA NIM
+    "deepseek-ai/deepseek-r1":      (0.80, 2.00),
+}
+_FALLBACK_PRICING: tuple[float, float] = (1.00, 3.00)  # conservative default
+
+
+def _estimate_cost(usage: TokenUsage, model: str) -> float:
+    """Calculate estimated cost in USD from real token counts."""
+    input_rate, output_rate = _MODEL_PRICING.get(model, _FALLBACK_PRICING)
+    return (
+        usage.input_tokens * input_rate + usage.output_tokens * output_rate
+    ) / 1_000_000
 _audit_log: list[AuditEntry] = []
 _runtime_overrides: dict[str, object] = {}
 _auth_states: dict[str, float] = {}
@@ -87,6 +128,17 @@ def _is_rate_limited(repo_key: str, window: int, max_reviews: int) -> bool:
         return True
     _rate_limit_log[repo_key].append(now)
     return False
+
+
+def _get_current_month_cost() -> float:
+    """Sum all estimated costs for the current calendar month."""
+    current_month_prefix = datetime.now(UTC).strftime("%Y-%m")
+    total_cost = 0.0
+    for repo, days in _cost_metrics.items():
+        for day, row in days.items():
+            if day.startswith(current_month_prefix):
+                total_cost += row.get("estimated_cost_usd", 0.0)
+    return total_cost
 
 
 def _add_webhook_log(
@@ -116,9 +168,14 @@ def _effective_settings(settings: Settings) -> dict[str, object]:
         "llm_provider": settings.llm_provider,
         "llm_model": settings.llm_model,
         "key_roulette_enabled": settings.key_roulette_enabled,
+        "model_auto_routing_enabled": settings.model_auto_routing_enabled,
+        "auto_route_simple_model": settings.auto_route_simple_model,
+        "auto_route_complex_model": settings.auto_route_complex_model,
+        "key_failure_cooldown_seconds": settings.key_failure_cooldown_seconds,
         "diff_token_limit": settings.diff_token_limit,
         "rate_limit_window_seconds": settings.rate_limit_window_seconds,
         "rate_limit_max_reviews": settings.rate_limit_max_reviews,
+        "monthly_budget_cap": settings.monthly_budget_cap,
         "llm_api_key": settings.llm_api_key,
     }
     return {**base, **_runtime_overrides}
@@ -285,9 +342,29 @@ async def github_callback(code: str = "", state: str = "") -> RedirectResponse:
     return response
 
 
+@app.get("/api/dashboard/repositories", response_model=list[str])
+async def dashboard_repositories() -> list[str]:
+    repos = set()
+    for review in _review_feed:
+        if review.repo:
+            repos.add(review.repo)
+    for log in _webhook_logs:
+        if log.repo:
+            repos.add(log.repo)
+    for r_name in _cost_metrics.keys():
+        if r_name:
+            repos.add(r_name)
+    return sorted(list(repos))
+
+
 @app.get("/api/dashboard/reviews", response_model=list[ReviewFeedItem])
-async def dashboard_reviews() -> list[ReviewFeedItem]:
-    return _review_feed[:50]
+async def dashboard_reviews(repo: str | None = None, org: str | None = None) -> list[ReviewFeedItem]:
+    filtered = _review_feed
+    if repo:
+        filtered = [r for r in filtered if r.repo == repo]
+    if org:
+        filtered = [r for r in filtered if r.repo.split("/")[0].lower() == org.lower()]
+    return filtered[:50]
 
 
 @app.get("/api/dashboard/reviews/{review_id}", response_model=ReviewDetail)
@@ -299,22 +376,48 @@ async def dashboard_review_detail(review_id: str) -> ReviewDetail:
 
 
 @app.get("/api/dashboard/webhooks", response_model=list[WebhookLogEntry])
-async def dashboard_webhooks() -> list[WebhookLogEntry]:
-    return _webhook_logs[:100]
+async def dashboard_webhooks(repo: str | None = None, org: str | None = None) -> list[WebhookLogEntry]:
+    filtered = _webhook_logs
+    if repo:
+        filtered = [w for w in filtered if w.repo == repo]
+    if org:
+        filtered = [w for w in filtered if w.repo.split("/")[0].lower() == org.lower()]
+    return filtered[:100]
 
 
 @app.get("/api/dashboard/cost", response_model=CostSummary)
-async def dashboard_cost() -> CostSummary:
+async def dashboard_cost(repo: str | None = None, org: str | None = None) -> CostSummary:
     points: list[CostPoint] = []
     for offset in range(6, -1, -1):
         day = _today_key(offset)
-        row = _cost_metrics[day]
+        
+        token_usage = 0
+        input_tokens = 0
+        output_tokens = 0
+        estimated_cost_usd = 0.0
+        reviews = 0
+        
+        for r_name, days_data in _cost_metrics.items():
+            if repo and r_name != repo:
+                continue
+            if org and r_name.split("/")[0].lower() != org.lower():
+                continue
+            if day in days_data:
+                day_row = days_data[day]
+                token_usage += int(day_row["token_usage"])
+                input_tokens += int(day_row["input_tokens"])
+                output_tokens += int(day_row["output_tokens"])
+                estimated_cost_usd += day_row["estimated_cost_usd"]
+                reviews += int(day_row["reviews"])
+                
         points.append(
             CostPoint(
                 date=day,
-                token_usage=int(row["token_usage"]),
-                estimated_cost_usd=round(row["estimated_cost_usd"], 4),
-                reviews=int(row["reviews"]),
+                token_usage=token_usage,
+                input_tokens=input_tokens,
+                output_tokens=output_tokens,
+                estimated_cost_usd=round(estimated_cost_usd, 6),
+                reviews=reviews,
             )
         )
 
@@ -336,14 +439,26 @@ async def dashboard_cost() -> CostSummary:
 async def dashboard_config() -> ConfigView:
     settings = get_settings()
     effective = _effective_settings(settings)
+    resolved = _resolved_settings(settings)
+    key_health = [KeyHealthView.model_validate(item) for item in get_api_key_health_snapshot(resolved)]
+    unhealthy_key_count = sum(1 for item in key_health if item.status != "healthy")
     return ConfigView(
         llm_provider=str(effective["llm_provider"]),
         llm_model=str(effective["llm_model"]),
         key_roulette_enabled=bool(effective["key_roulette_enabled"]),
+        model_auto_routing_enabled=bool(effective["model_auto_routing_enabled"]),
+        auto_route_simple_model=str(effective["auto_route_simple_model"]),
+        auto_route_complex_model=str(effective["auto_route_complex_model"]),
+        key_failure_cooldown_seconds=int(effective["key_failure_cooldown_seconds"]),
         diff_token_limit=int(effective["diff_token_limit"]),
         rate_limit_window_seconds=int(effective["rate_limit_window_seconds"]),
         rate_limit_max_reviews=int(effective["rate_limit_max_reviews"]),
+        monthly_budget_cap=float(effective.get("monthly_budget_cap", 0.0)),
+        current_month_spend=_get_current_month_cost(),
         has_api_keys=bool(str(effective["llm_api_key"]).strip()),
+        active_key_count=len(key_health) - unhealthy_key_count,
+        unhealthy_key_count=unhealthy_key_count,
+        key_health=key_health,
     )
 
 
@@ -441,6 +556,33 @@ async def handle_webhook(
         _add_webhook_log(repo_key, x_github_event, action, "skipped", "rate limited")
         return {"status": "skipped", "reason": "rate limited"}
 
+    monthly_cost = _get_current_month_cost()
+    budget_cap = float(effective.get("monthly_budget_cap", 0.0))
+    if budget_cap > 0.0 and monthly_cost >= budget_cap:
+        try:
+            private_key = settings.resolved_private_key
+            token = get_installation_token(
+                settings.github_app_id,
+                private_key,
+                settings.github_installation_id,
+            )
+            await set_label(owner, repo_name, pull_number, "budget-paused", token)
+        except Exception as e:
+            logger.error("Failed to set budget-paused label: %s", e)
+
+        _add_webhook_log(
+            repo_key,
+            x_github_event,
+            action,
+            "skipped",
+            f"monthly budget cap exceeded (${monthly_cost:.2f} / ${budget_cap:.2f})"
+        )
+        logger.warning(
+            "Monthly budget cap exceeded ($%.2f spent / $%.2f limit). Skipping review for %s#%d.",
+            monthly_cost, budget_cap, repo_key, pull_number
+        )
+        return {"status": "skipped", "reason": "budget cap exceeded"}
+
     try:
         private_key = settings.resolved_private_key
         token = get_installation_token(
@@ -456,7 +598,7 @@ async def handle_webhook(
         if was_truncated:
             logger.warning("PR diff was truncated for %s#%d", repo_key, pull_number)
 
-        result = await review_diff(
+        result, usage, routing = await review_diff(
             diff,
             resolved_settings,
             pr_title=pr_title,
@@ -474,8 +616,10 @@ async def handle_webhook(
             verdict=result.verdict,
             comments_count=len(result.comments),
             summary=result.summary,
-            provider=str(effective["llm_provider"]),
-            model=str(effective["llm_model"]),
+            provider=routing.provider,
+            model=routing.model,
+            routing_tier=routing.tier,
+            routing_reason=routing.reason,
             created_at=datetime.now(UTC),
             pull_request_title=pr_title,
             pull_request_body=pr_body,
@@ -484,11 +628,13 @@ async def handle_webhook(
         _review_feed.insert(0, review_entry)
         del _review_feed[200:]
 
-        token_count = count_tokens(raw_diff)
         day = _today_key()
-        _cost_metrics[day]["token_usage"] += token_count
-        _cost_metrics[day]["estimated_cost_usd"] += token_count * 0.000003
-        _cost_metrics[day]["reviews"] += 1
+        model_name = routing.model
+        _cost_metrics[repo_key][day]["input_tokens"] += usage.input_tokens
+        _cost_metrics[repo_key][day]["output_tokens"] += usage.output_tokens
+        _cost_metrics[repo_key][day]["token_usage"] += usage.total_tokens
+        _cost_metrics[repo_key][day]["estimated_cost_usd"] += _estimate_cost(usage, model_name)
+        _cost_metrics[repo_key][day]["reviews"] += 1
 
         _add_webhook_log(repo_key, x_github_event, action, "processed")
         logger.info("Review complete for %s#%d — verdict: %s", repo_key, pull_number, result.verdict)

@@ -1,4 +1,5 @@
 export type Verdict = "looks-good" | "needs-work";
+export type RoutingTier = "lightweight" | "standard" | "reasoning";
 
 export interface ReviewFeedItem {
   id: string;
@@ -9,6 +10,8 @@ export interface ReviewFeedItem {
   summary: string;
   provider: string;
   model: string;
+  routing_tier: RoutingTier;
+  routing_reason: string;
   created_at: string;
 }
 
@@ -28,10 +31,29 @@ export interface ConfigView {
   llm_provider: string;
   llm_model: string;
   key_roulette_enabled: boolean;
+  model_auto_routing_enabled: boolean;
+  auto_route_simple_model: string;
+  auto_route_complex_model: string;
+  key_failure_cooldown_seconds: number;
   diff_token_limit: number;
   rate_limit_window_seconds: number;
   rate_limit_max_reviews: number;
+  monthly_budget_cap: number;
+  current_month_spend: number;
   has_api_keys: boolean;
+  active_key_count: number;
+  unhealthy_key_count: number;
+  key_health: KeyHealthView[];
+}
+
+export interface KeyHealthView {
+  key_suffix: string;
+  status: "healthy" | "cooldown";
+  failure_count: number;
+  last_error_status?: number | null;
+  last_error_reason?: string | null;
+  last_error_at?: string | null;
+  disabled_until?: string | null;
 }
 
 export interface CostSummary {

@@ -2,13 +2,19 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
+from unittest.mock import patch
 
+from app.config import Settings, get_api_key_health_snapshot
 from app.models import ReviewResult
 from app.review_engine import (
     build_user_message,
+    call_llm,
     count_tokens,
+    decide_routing,
     load_system_prompt,
+    TokenUsage,
     truncate_diff,
 )
 
@@ -176,3 +182,81 @@ class TestReviewResultParsing:
         parsed = json.loads(json_str)
         result = ReviewResult.model_validate(parsed)
         assert result.verdict == "looks-good"
+
+
+class TestRoutingDecisions:
+    def test_simple_diff_routes_to_lightweight_model(self):
+        settings = Settings(
+            llm_provider="openai",
+            llm_api_key="key-1111",
+            llm_model="gpt-4o",
+            model_auto_routing_enabled=True,
+        )
+        diff = """--- a/README.md
++++ b/README.md
+@@ -1,2 +1,2 @@
+-Typpo
++Typo
+"""
+
+        routing = decide_routing(diff, settings, pr_title="docs: fix typo")
+
+        assert routing.tier == "lightweight"
+        assert routing.model == "gpt-4o-mini"
+
+    def test_complex_diff_routes_to_reasoning_model(self):
+        settings = Settings(
+            llm_provider="gemini",
+            llm_api_key="key-1111",
+            llm_model="gemini-2.0-flash",
+            model_auto_routing_enabled=True,
+        )
+        diff = """--- a/db/migrations/001_users.sql
++++ b/db/migrations/001_users.sql
+@@ -1,2 +1,8 @@
++ALTER TABLE users ADD COLUMN encrypted_token TEXT;
+"""
+
+        routing = decide_routing(diff, settings, pr_title="add auth migration")
+
+        assert routing.tier == "reasoning"
+        assert routing.model == "gemini-2.5-pro"
+
+
+class TestKeyFailover:
+    def test_fails_over_to_next_key_after_rate_limit(self):
+        settings = Settings(
+            llm_provider="openai",
+            llm_api_key="primary-1111,backup-2222",
+            llm_model="gpt-4o",
+            key_roulette_enabled=False,
+            key_failure_cooldown_seconds=300,
+        )
+        routing = decide_routing("+ quick change", settings)
+        attempted_keys: list[str] = []
+
+        class RateLimitError(Exception):
+            def __init__(self, status_code: int):
+                super().__init__(f"provider failed with {status_code}")
+                self.status_code = status_code
+
+        async def fake_provider(system_prompt: str, user_message: str, active_settings: Settings, api_key: str):
+            attempted_keys.append(api_key)
+            if api_key == "primary-1111":
+                raise RateLimitError(429)
+            assert active_settings.llm_model == "gpt-4o"
+            return {"verdict": "looks-good", "summary": "ok", "comments": []}, TokenUsage(input_tokens=1, output_tokens=1)
+
+        with patch.dict("app.review_engine._PROVIDER_MAP", {"openai": fake_provider}):
+            payload, usage = asyncio.run(call_llm("system", "user", settings, routing))
+
+        health = get_api_key_health_snapshot(settings)
+        primary = next(item for item in health if item["key_suffix"] == "1111")
+        backup = next(item for item in health if item["key_suffix"] == "2222")
+
+        assert attempted_keys == ["primary-1111", "backup-2222"]
+        assert payload["verdict"] == "looks-good"
+        assert usage.input_tokens == 1
+        assert primary["status"] == "cooldown"
+        assert primary["last_error_status"] == 429
+        assert backup["status"] == "healthy"

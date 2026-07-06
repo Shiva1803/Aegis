@@ -14,14 +14,34 @@ async function get<T>(path: string): Promise<T> {
   return response.json() as Promise<T>;
 }
 
+type ConfigUpdatePayload = Partial<ConfigView> & {
+  llm_api_key?: string;
+};
+
 export const api = {
-  getReviews: () => get<ReviewFeedItem[]>("/api/dashboard/reviews"),
+  getReviews: (filters?: { repo?: string; org?: string }) => {
+    const params = new URLSearchParams();
+    if (filters?.repo) params.append("repo", filters.repo);
+    if (filters?.org) params.append("org", filters.org);
+    return get<ReviewFeedItem[]>(`/api/dashboard/reviews?${params.toString()}`);
+  },
   getReview: (id: string) => get<ReviewDetail>(`/api/dashboard/reviews/${id}`),
   getConfig: () => get<ConfigView>("/api/dashboard/config"),
-  getCost: () => get<CostSummary>("/api/dashboard/cost"),
-  getWebhooks: () => get<WebhookLog[]>("/api/dashboard/webhooks"),
+  getCost: (filters?: { repo?: string; org?: string }) => {
+    const params = new URLSearchParams();
+    if (filters?.repo) params.append("repo", filters.repo);
+    if (filters?.org) params.append("org", filters.org);
+    return get<CostSummary>(`/api/dashboard/cost?${params.toString()}`);
+  },
+  getWebhooks: (filters?: { repo?: string; org?: string }) => {
+    const params = new URLSearchParams();
+    if (filters?.repo) params.append("repo", filters.repo);
+    if (filters?.org) params.append("org", filters.org);
+    return get<WebhookLog[]>(`/api/dashboard/webhooks?${params.toString()}`);
+  },
+  getRepositories: () => get<string[]>("/api/dashboard/repositories"),
   getAudit: () => get<AuditEntry[]>("/api/dashboard/audit"),
-  updateConfig: async (payload: Partial<ConfigView>) => {
+  updateConfig: async (payload: ConfigUpdatePayload) => {
     const response = await fetch(`${BASE_URL}/api/dashboard/config`, {
       method: "PATCH",
       credentials: "include",

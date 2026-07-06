@@ -4,12 +4,13 @@ import hashlib
 import hmac
 import json
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, patch, ANY
 
 from fastapi.testclient import TestClient
 
 from app.main import app
 from app.models import ReviewResult
+from app.review_engine import RoutingDecision, TokenUsage
 
 
 def _signature(secret: str, body: bytes) -> str:
@@ -34,13 +35,19 @@ def _settings() -> SimpleNamespace:
         llm_provider="nvidia_nim",
         llm_model="deepseek-ai/deepseek-v4-pro",
         key_roulette_enabled=False,
+        model_auto_routing_enabled=False,
+        auto_route_simple_model="",
+        auto_route_complex_model="",
+        key_failure_cooldown_seconds=900,
         diff_token_limit=8000,
+        monthly_budget_cap=0.0,
         llm_api_key="nim-key",
         nvidia_nim_base_url="https://integrate.api.nvidia.com/v1",
         nvidia_nim_disable_thinking=True,
         admin_users=set(),
         resolved_private_key="pem",
-        model_copy=lambda update: SimpleNamespace(**{**_settings().__dict__, **update}),
+        api_keys=["nim-key"],
+        model_copy=lambda update=None, **kwargs: SimpleNamespace(**{**_settings().__dict__, **((update or kwargs.get("update")) or {})}),
     )
 
 
@@ -65,10 +72,19 @@ def test_pull_request_webhook_populates_dashboard():
          patch(
              "app.main.review_diff",
              new=AsyncMock(
-                 return_value=ReviewResult(
-                     verdict="needs-work",
-                     summary="Found issue",
-                     comments=[],
+                 return_value=(
+                     ReviewResult(
+                         verdict="needs-work",
+                         summary="Found issue",
+                         comments=[],
+                     ),
+                     TokenUsage(input_tokens=150, output_tokens=50),
+                     RoutingDecision(
+                         provider="nvidia_nim",
+                         model="deepseek-ai/deepseek-v4-pro",
+                         tier="standard",
+                         reason="Smart routing disabled; using the configured default model.",
+                     ),
                  )
              ),
          ):
@@ -160,3 +176,53 @@ def test_closed_pull_request_is_logged_but_not_reviewed():
         assert len(webhooks) >= 1
         assert webhooks[0]["status"] == "ignored"
         assert webhooks[0]["action"] == "closed"
+
+
+def test_webhook_skipped_when_budget_cap_exceeded():
+    payload = {
+        "action": "opened",
+        "pull_request": {
+            "number": 42,
+            "head": {"sha": "abc123def456"},
+            "title": "A pricey PR",
+            "body": "This PR should be budget-paused",
+        },
+        "repository": {"name": "demo-repo", "owner": {"login": "demo-owner"}},
+    }
+    body = json.dumps(payload).encode()
+
+    settings_mock = _settings()
+    settings_mock.monthly_budget_cap = 10.0  # budget limit is $10.00
+
+    with patch("app.main.get_settings", return_value=settings_mock), \
+         patch("app.main._get_current_month_cost", return_value=12.50), \
+         patch("app.main.get_installation_token", return_value="test-token"), \
+         patch("app.main.set_label", new=AsyncMock()) as set_label_mock, \
+         patch("app.main.review_diff", new=AsyncMock()) as review_diff_mock:
+
+        client = TestClient(app)
+        response = client.post(
+            "/webhook",
+            data=body,
+            headers={
+                "X-Hub-Signature-256": _signature("test-secret", body),
+                "X-GitHub-Event": "pull_request",
+                "Content-Type": "application/json",
+            },
+        )
+
+        assert response.status_code == 200
+        assert response.json()["status"] == "skipped"
+        assert response.json()["reason"] == "budget cap exceeded"
+
+        # Verify the budget-paused label was applied
+        set_label_mock.assert_called_once_with(
+            "demo-owner", "demo-repo", 42, "budget-paused", ANY
+        )
+        # Verify the review was skipped (LLM not called)
+        review_diff_mock.assert_not_called()
+
+        webhooks = client.get("/api/dashboard/webhooks").json()
+        assert len(webhooks) >= 1
+        assert webhooks[0]["status"] == "skipped"
+        assert "monthly budget cap exceeded" in webhooks[0]["reason"]

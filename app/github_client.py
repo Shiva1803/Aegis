@@ -238,7 +238,7 @@ async def post_review_safe(
 # Labels
 # ────────────────────────────────────────────────────────────────
 
-BOT_LABELS = ("looks-good", "needs-work")
+BOT_LABELS = ("looks-good", "needs-work", "budget-paused")
 
 
 async def set_label(

@@ -12,6 +12,8 @@ from __future__ import annotations
 
 import itertools
 import logging
+from dataclasses import dataclass
+from datetime import UTC, datetime, timedelta
 from functools import lru_cache
 from pathlib import Path
 from typing import Literal
@@ -56,11 +58,16 @@ class Settings(BaseSettings):
     # When enabled, llm_api_key should be comma-separated keys:
     #   LLM_API_KEY=sk-key1,sk-key2,sk-key3
     key_roulette_enabled: bool = False
+    model_auto_routing_enabled: bool = False
+    auto_route_simple_model: str = ""
+    auto_route_complex_model: str = ""
+    key_failure_cooldown_seconds: int = 900
 
     # ── Guardrails ──────────────────────────────────────────────
     diff_token_limit: int = 8000
     rate_limit_window_seconds: int = 60
     rate_limit_max_reviews: int = 3
+    monthly_budget_cap: float = 0.0
 
     @field_validator("llm_api_key")
     @classmethod
@@ -116,17 +123,84 @@ class Settings(BaseSettings):
 # Thread-safe for async (single-threaded event loop).
 
 _key_cycle: itertools.cycle | None = None
+_key_cycle_keys: tuple[str, ...] | None = None
+
+
+@dataclass
+class KeyHealthRecord:
+    """Runtime health state for an individual API key."""
+
+    failure_count: int = 0
+    last_error_status: int | None = None
+    last_error_reason: str | None = None
+    last_error_at: datetime | None = None
+    disabled_until: datetime | None = None
+
+
+_key_health: dict[str, KeyHealthRecord] = {}
+
+
+def _key_suffix(key: str) -> str:
+    trimmed = key.strip()
+    if len(trimmed) <= 4:
+        return trimmed
+    return trimmed[-4:]
+
+
+def _get_key_record(api_key: str) -> KeyHealthRecord:
+    return _key_health.setdefault(api_key, KeyHealthRecord())
+
+
+def _is_key_healthy(api_key: str, *, now: datetime | None = None) -> bool:
+    record = _get_key_record(api_key)
+    reference_time = now or datetime.now(UTC)
+    if record.disabled_until and record.disabled_until > reference_time:
+        return False
+    return True
 
 
 def _get_key_cycle(settings: Settings) -> itertools.cycle:
     """Lazily initialize the key roulette cycle."""
-    global _key_cycle
-    if _key_cycle is None:
+    global _key_cycle, _key_cycle_keys
+    keys_tuple = tuple(settings.api_keys)
+    if _key_cycle is None or _key_cycle_keys != keys_tuple:
         keys = settings.api_keys
         if len(keys) > 1:
             logger.info("Key roulette initialized with %d keys", len(keys))
         _key_cycle = itertools.cycle(keys)
+        _key_cycle_keys = keys_tuple
     return _key_cycle
+
+
+def get_api_key_candidates(settings: Settings) -> list[str]:
+    """
+    Return API keys in preferred order, filtering out cooldown keys when possible.
+
+    If key roulette is enabled, the current round-robin selection becomes the first
+    candidate and the remaining keys follow in sequence. If roulette is disabled,
+    the configured order is preserved. When all keys are cooling down, the original
+    order is returned so the system can still attempt recovery.
+    """
+    keys = settings.api_keys
+    if len(keys) <= 1:
+        return keys
+
+    ordered_keys = keys[:]
+    if settings.key_roulette_enabled:
+        cycle = _get_key_cycle(settings)
+        start_key = next(cycle)
+        start_index = ordered_keys.index(start_key)
+        ordered_keys = ordered_keys[start_index:] + ordered_keys[:start_index]
+
+    healthy_keys = [key for key in ordered_keys if _is_key_healthy(key)]
+    if healthy_keys:
+        unhealthy_keys = [key for key in ordered_keys if key not in healthy_keys]
+        return healthy_keys + unhealthy_keys
+    return ordered_keys
+
+
+def get_healthy_api_keys(settings: Settings) -> list[str]:
+    return [key for key in settings.api_keys if _is_key_healthy(key)]
 
 
 def get_active_api_key(settings: Settings) -> str:
@@ -136,14 +210,61 @@ def get_active_api_key(settings: Settings) -> str:
     - If roulette is disabled (default), always returns the first key.
     - If roulette is enabled, cycles through keys round-robin.
     """
-    if not settings.key_roulette_enabled:
-        return settings.api_keys[0]
-
-    cycle = _get_key_cycle(settings)
-    key = next(cycle)
+    candidates = get_api_key_candidates(settings)
+    key = candidates[0]
     # Log only the last 4 chars for debugging without exposing the full key
     logger.debug("Key roulette selected key ending in ...%s", key[-4:])
     return key
+
+
+def mark_api_key_failure(
+    settings: Settings,
+    api_key: str,
+    status_code: int,
+    reason: str,
+) -> None:
+    """
+    Mark an API key as temporarily unhealthy after auth/rate-limit failures.
+    """
+    record = _get_key_record(api_key)
+    now = datetime.now(UTC)
+    record.failure_count += 1
+    record.last_error_status = status_code
+    record.last_error_reason = reason[:240]
+    record.last_error_at = now
+    record.disabled_until = now + timedelta(seconds=max(settings.key_failure_cooldown_seconds, 0))
+    logger.warning(
+        "Flagged API key ...%s unhealthy for %ds after %s",
+        _key_suffix(api_key),
+        settings.key_failure_cooldown_seconds,
+        status_code,
+    )
+
+
+def mark_api_key_success(api_key: str) -> None:
+    """Clear any active cooldown when a key succeeds."""
+    record = _get_key_record(api_key)
+    record.disabled_until = None
+
+
+def get_api_key_health_snapshot(settings: Settings) -> list[dict[str, object]]:
+    """Return dashboard-safe health metadata for each configured API key."""
+    now = datetime.now(UTC)
+    snapshot: list[dict[str, object]] = []
+    for api_key in settings.api_keys:
+        record = _get_key_record(api_key)
+        snapshot.append(
+            {
+                "key_suffix": _key_suffix(api_key),
+                "status": "healthy" if _is_key_healthy(api_key, now=now) else "cooldown",
+                "failure_count": record.failure_count,
+                "last_error_status": record.last_error_status,
+                "last_error_reason": record.last_error_reason,
+                "last_error_at": record.last_error_at,
+                "disabled_until": record.disabled_until,
+            }
+        )
+    return snapshot
 
 
 @lru_cache
