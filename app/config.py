@@ -52,6 +52,7 @@ class Settings(BaseSettings):
     llm_model: str = "claude-sonnet-4-20250514"
     nvidia_nim_base_url: str = "https://integrate.api.nvidia.com/v1"
     nvidia_nim_disable_thinking: bool = True
+    custom_system_prompt: str = ""
 
     # ── Key roulette (optional) ─────────────────────────────────
     # Set to true to enable round-robin rotation across multiple keys.

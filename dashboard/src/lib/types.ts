@@ -41,6 +41,7 @@ export interface ConfigView {
   monthly_budget_cap: number;
   current_month_spend: number;
   has_api_keys: boolean;
+  custom_system_prompt: string;
   active_key_count: number;
   unhealthy_key_count: number;
   key_health: KeyHealthView[];
@@ -56,10 +57,20 @@ export interface KeyHealthView {
   disabled_until?: string | null;
 }
 
+export interface RepoCostBreakdown {
+  repo_name: string;
+  token_usage: number;
+  estimated_cost_usd: number;
+  reviews: number;
+  avg_cost_per_pr_usd: number;
+}
+
 export interface CostSummary {
   last_7_days: Array<{
     date: string;
     token_usage: number;
+    input_tokens?: number;
+    output_tokens?: number;
     estimated_cost_usd: number;
     reviews: number;
   }>;
@@ -67,6 +78,7 @@ export interface CostSummary {
   total_tokens: number;
   total_estimated_cost_usd: number;
   avg_cost_per_pr_usd: number;
+  breakdown: RepoCostBreakdown[];
 }
 
 export interface WebhookLog {
@@ -95,3 +107,29 @@ export interface AuthStatus {
     role: "admin" | "viewer";
   };
 }
+
+export interface GitHubStatus {
+  status: "healthy" | "unconfigured" | "error";
+  error: string | null;
+}
+
+export interface SeverityInsights {
+  critical: number;
+  suggestion: number;
+  nit: number;
+}
+
+export interface CategoryInsights {
+  security: number;
+  performance: number;
+  logic: number;
+  style: number;
+}
+
+export interface ReviewInsights {
+  total_comments: number;
+  total_reviews: number;
+  severity: SeverityInsights;
+  category: CategoryInsights;
+}
+

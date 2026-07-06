@@ -584,7 +584,8 @@ async def review_diff(
     On parse failure, retries once with a stricter prompt.
     On second failure, returns a minimal fallback result with zero usage.
     """
-    system_prompt = load_system_prompt()
+    custom_prompt = settings.custom_system_prompt.strip() if hasattr(settings, "custom_system_prompt") else ""
+    system_prompt = custom_prompt if custom_prompt else load_system_prompt()
     user_message = build_user_message(annotated_diff, pr_title, pr_body)
     routing = decide_routing(annotated_diff, settings, pr_title=pr_title, pr_body=pr_body)
 

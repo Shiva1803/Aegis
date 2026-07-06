@@ -44,6 +44,7 @@ def _settings() -> SimpleNamespace:
         llm_api_key="nim-key",
         nvidia_nim_base_url="https://integrate.api.nvidia.com/v1",
         nvidia_nim_disable_thinking=True,
+        custom_system_prompt="",
         admin_users=set(),
         resolved_private_key="pem",
         api_keys=["nim-key"],
@@ -113,6 +114,10 @@ def test_pull_request_webhook_populates_dashboard():
 
         cost = client.get("/api/dashboard/cost").json()
         assert cost["total_reviews"] >= 1
+        assert "breakdown" in cost
+        assert len(cost["breakdown"]) >= 1
+        assert cost["breakdown"][0]["repo_name"] == "demo-owner/demo-repo"
+        assert cost["breakdown"][0]["reviews"] >= 1
 
 
 def test_non_pull_request_events_are_logged_as_ignored():
@@ -226,3 +231,150 @@ def test_webhook_skipped_when_budget_cap_exceeded():
         assert len(webhooks) >= 1
         assert webhooks[0]["status"] == "skipped"
         assert "monthly budget cap exceeded" in webhooks[0]["reason"]
+
+
+def test_github_status_healthy():
+    settings_mock = _settings()
+    settings_mock.github_app_id = 1
+    settings_mock.github_installation_id = 2
+    settings_mock.resolved_private_key = "pem"
+
+    from app.main import _github_status_cache
+    _github_status_cache["data"] = None
+    _github_status_cache["expires_at"] = 0.0
+
+    with patch("app.main.get_settings", return_value=settings_mock), \
+         patch("app.main.get_installation_token", return_value="ghs_test"):
+        client = TestClient(app)
+        response = client.get("/api/dashboard/github-status")
+        assert response.status_code == 200
+        assert response.json()["status"] == "healthy"
+        assert response.json()["error"] is None
+
+
+def test_github_status_unconfigured():
+    settings_mock = _settings()
+    settings_mock.github_app_id = 0
+    settings_mock.github_installation_id = 0
+    settings_mock.resolved_private_key = ""
+
+    from app.main import _github_status_cache
+    _github_status_cache["data"] = None
+    _github_status_cache["expires_at"] = 0.0
+
+    with patch("app.main.get_settings", return_value=settings_mock):
+        client = TestClient(app)
+        response = client.get("/api/dashboard/github-status")
+        assert response.status_code == 200
+        assert response.json()["status"] == "unconfigured"
+        assert "not configured" in response.json()["error"]
+
+
+def test_github_status_error():
+    settings_mock = _settings()
+    settings_mock.github_app_id = 1
+    settings_mock.github_installation_id = 2
+    settings_mock.resolved_private_key = "pem"
+
+    from app.main import _github_status_cache
+    _github_status_cache["data"] = None
+    _github_status_cache["expires_at"] = 0.0
+
+    with patch("app.main.get_settings", return_value=settings_mock), \
+         patch("app.main.get_installation_token", side_effect=Exception("Failed to decode PEM")):
+        client = TestClient(app)
+        response = client.get("/api/dashboard/github-status")
+        assert response.status_code == 200
+        assert response.json()["status"] == "error"
+        assert "Failed to decode PEM" in response.json()["error"]
+
+
+def test_trigger_sandbox_webhook():
+    settings_mock = _settings()
+    settings_mock.github_webhook_secret = "test-secret"
+
+    with patch("app.main.get_settings", return_value=settings_mock), \
+         patch("app.main._require_admin", return_value={"login": "admin"}):
+        client = TestClient(app)
+
+        response = client.post("/api/dashboard/webhooks/test")
+        assert response.status_code == 200
+        assert response.json()["success"] is True
+
+        webhooks = client.get("/api/dashboard/webhooks").json()
+        assert len(webhooks) >= 1
+        assert webhooks[0]["repo"] == "aegis-auth/aegis-sandbox-test"
+        assert webhooks[0]["status"] == "processed"
+        assert "Mock webhook sandbox delivery processed successfully." in webhooks[0]["reason"]
+
+
+def test_dashboard_insights():
+    settings_mock = _settings()
+
+    with patch("app.main.get_settings", return_value=settings_mock), \
+         patch("app.main.get_installation_token", return_value="ghs_test"), \
+         patch("app.main.fetch_pr_diff", new=AsyncMock(return_value="@@ -1 +1 @@\n-print(1)\n+print(2)")), \
+         patch("app.main.post_review_safe", new=AsyncMock()), \
+         patch("app.main.set_label", new=AsyncMock()), \
+         patch("app.main.review_diff", new=AsyncMock(return_value=(
+             ReviewResult(
+                 verdict="needs-work",
+                 summary="Mock PR review summary details.",
+                 comments=[
+                     {
+                         "file": "main.py",
+                         "line": 10,
+                         "severity": "critical",
+                         "category": "security",
+                         "body": "Mock critical security issue."
+                     },
+                     {
+                         "file": "utils.ts",
+                         "line": 25,
+                         "severity": "suggestion",
+                         "category": "performance",
+                         "body": "Mock suggestion performance issue."
+                     }
+                 ]
+             ),
+             TokenUsage(input_tokens=100, output_tokens=50),
+             RoutingDecision(provider="openai", model="gpt-4o", tier="standard", reason="test")
+         ))):
+        client = TestClient(app)
+
+        # Trigger webhook to populate review feed
+        payload = {
+            "action": "opened",
+            "pull_request": {
+                "number": 42,
+                "head": {"sha": "insights9999"},
+                "title": "PR to scan insights",
+                "body": "Body text",
+            },
+            "repository": {"name": "test-repo", "owner": {"login": "test-owner"}},
+        }
+        body = json.dumps(payload).encode()
+        response = client.post(
+            "/webhook",
+            data=body,
+            headers={
+                "X-Hub-Signature-256": _signature("test-secret", body),
+                "X-GitHub-Event": "pull_request",
+                "Content-Type": "application/json",
+            },
+        )
+        assert response.status_code == 200
+
+        # Query insights endpoint
+        insights = client.get("/api/dashboard/insights").json()
+        assert insights["total_reviews"] >= 1
+        assert insights["total_comments"] >= 2
+        assert insights["severity"]["critical"] == 1
+        assert insights["severity"]["suggestion"] == 1
+        assert insights["severity"]["nit"] == 0
+        assert insights["category"]["security"] == 1
+        assert insights["category"]["performance"] == 1
+        assert insights["category"]["logic"] == 0
+        assert insights["category"]["style"] == 0
+
+

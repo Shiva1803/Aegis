@@ -48,12 +48,21 @@ class CostPoint(BaseModel):
     reviews: int
 
 
+class RepoCostBreakdown(BaseModel):
+    repo_name: str
+    token_usage: int
+    estimated_cost_usd: float
+    reviews: int
+    avg_cost_per_pr_usd: float
+
+
 class CostSummary(BaseModel):
     last_7_days: list[CostPoint]
     total_reviews: int
     total_tokens: int
     total_estimated_cost_usd: float
     avg_cost_per_pr_usd: float
+    breakdown: list[RepoCostBreakdown] = []
 
 
 class ConfigView(BaseModel):
@@ -70,6 +79,7 @@ class ConfigView(BaseModel):
     monthly_budget_cap: float
     current_month_spend: float
     has_api_keys: bool
+    custom_system_prompt: str
     active_key_count: int = 0
     unhealthy_key_count: int = 0
     key_health: list["KeyHealthView"] = Field(default_factory=list)
@@ -88,6 +98,7 @@ class ConfigUpdate(BaseModel):
     rate_limit_max_reviews: int | None = None
     monthly_budget_cap: float | None = None
     llm_api_key: str | None = None
+    custom_system_prompt: str | None = None
 
 
 class AuditEntry(BaseModel):
@@ -108,3 +119,29 @@ class KeyHealthView(BaseModel):
 
 
 ConfigView.model_rebuild()
+
+
+class GitHubStatusView(BaseModel):
+    status: Literal["healthy", "unconfigured", "error"]
+    error: str | None = None
+
+
+class SeverityInsights(BaseModel):
+    critical: int = 0
+    suggestion: int = 0
+    nit: int = 0
+
+
+class CategoryInsights(BaseModel):
+    security: int = 0
+    performance: int = 0
+    logic: int = 0
+    style: int = 0
+
+
+class ReviewInsights(BaseModel):
+    total_comments: int = 0
+    total_reviews: int = 0
+    severity: SeverityInsights
+    category: CategoryInsights
+

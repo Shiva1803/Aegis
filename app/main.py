@@ -5,6 +5,7 @@ import hmac
 import logging
 import secrets
 import time
+import json
 from collections import defaultdict
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -28,6 +29,11 @@ from app.dashboard_models import (
     ReviewDetail,
     ReviewFeedItem,
     WebhookLogEntry,
+    GitHubStatusView,
+    RepoCostBreakdown,
+    SeverityInsights,
+    CategoryInsights,
+    ReviewInsights,
 )
 from app.github_client import (
     annotate_diff,
@@ -177,6 +183,7 @@ def _effective_settings(settings: Settings) -> dict[str, object]:
         "rate_limit_max_reviews": settings.rate_limit_max_reviews,
         "monthly_budget_cap": settings.monthly_budget_cap,
         "llm_api_key": settings.llm_api_key,
+        "custom_system_prompt": settings.custom_system_prompt,
     }
     return {**base, **_runtime_overrides}
 
@@ -375,6 +382,49 @@ async def dashboard_review_detail(review_id: str) -> ReviewDetail:
     raise HTTPException(status_code=404, detail="Review not found")
 
 
+@app.get("/api/dashboard/insights", response_model=ReviewInsights)
+async def dashboard_insights(repo: str | None = None, org: str | None = None) -> ReviewInsights:
+    filtered = _review_feed
+    if repo:
+        filtered = [r for r in filtered if r.repo == repo]
+    if org:
+        filtered = [r for r in filtered if r.repo.split("/")[0].lower() == org.lower()]
+
+    severity = SeverityInsights()
+    category = CategoryInsights()
+    total_comments = 0
+
+    for r in filtered:
+        for c in r.comments:
+            total_comments += 1
+            # Severity
+            sev = c.get("severity", "").lower()
+            if sev == "critical":
+                severity.critical += 1
+            elif sev == "suggestion":
+                severity.suggestion += 1
+            elif sev == "nit":
+                severity.nit += 1
+
+            # Category
+            cat = c.get("category", "").lower()
+            if cat == "security":
+                category.security += 1
+            elif cat == "performance":
+                category.performance += 1
+            elif cat == "logic":
+                category.logic += 1
+            elif cat == "style":
+                category.style += 1
+
+    return ReviewInsights(
+        total_comments=total_comments,
+        total_reviews=len(filtered),
+        severity=severity,
+        category=category,
+    )
+
+
 @app.get("/api/dashboard/webhooks", response_model=list[WebhookLogEntry])
 async def dashboard_webhooks(repo: str | None = None, org: str | None = None) -> list[WebhookLogEntry]:
     filtered = _webhook_logs
@@ -426,12 +476,45 @@ async def dashboard_cost(repo: str | None = None, org: str | None = None) -> Cos
     total_cost = round(sum(point.estimated_cost_usd for point in points), 4)
     avg_cost = round(total_cost / total_reviews, 4) if total_reviews else 0.0
 
+    breakdown_list: list[RepoCostBreakdown] = []
+    for r_name, days_data in _cost_metrics.items():
+        if repo and r_name != repo:
+            continue
+        if org and r_name.split("/")[0].lower() != org.lower():
+            continue
+
+        r_tokens = 0
+        r_cost = 0.0
+        r_reviews = 0
+
+        for offset in range(6, -1, -1):
+            day = _today_key(offset)
+            if day in days_data:
+                day_row = days_data[day]
+                r_tokens += int(day_row["token_usage"])
+                r_cost += day_row["estimated_cost_usd"]
+                r_reviews += int(day_row["reviews"])
+
+        if r_reviews > 0 or r_tokens > 0:
+            breakdown_list.append(
+                RepoCostBreakdown(
+                    repo_name=r_name,
+                    token_usage=r_tokens,
+                    estimated_cost_usd=round(r_cost, 6),
+                    reviews=r_reviews,
+                    avg_cost_per_pr_usd=round(r_cost / r_reviews, 4) if r_reviews > 0 else 0.0
+                )
+            )
+
+    breakdown_list.sort(key=lambda x: x.estimated_cost_usd, reverse=True)
+
     return CostSummary(
         last_7_days=points,
         total_reviews=total_reviews,
         total_tokens=total_tokens,
         total_estimated_cost_usd=total_cost,
         avg_cost_per_pr_usd=avg_cost,
+        breakdown=breakdown_list,
     )
 
 
@@ -456,6 +539,7 @@ async def dashboard_config() -> ConfigView:
         monthly_budget_cap=float(effective.get("monthly_budget_cap", 0.0)),
         current_month_spend=_get_current_month_cost(),
         has_api_keys=bool(str(effective["llm_api_key"]).strip()),
+        custom_system_prompt=str(effective.get("custom_system_prompt", "")),
         active_key_count=len(key_health) - unhealthy_key_count,
         unhealthy_key_count=unhealthy_key_count,
         key_health=key_health,
@@ -484,6 +568,86 @@ async def update_dashboard_config(update: ConfigUpdate, request: Request) -> Con
 @app.get("/api/dashboard/audit", response_model=list[AuditEntry])
 async def dashboard_audit() -> list[AuditEntry]:
     return _audit_log[:100]
+
+
+_github_status_cache = {"data": None, "expires_at": 0.0}
+
+
+@app.get("/api/dashboard/github-status", response_model=GitHubStatusView)
+async def get_github_status():
+    now = time.time()
+    if _github_status_cache["data"] is not None and _github_status_cache["expires_at"] > now:
+        return _github_status_cache["data"]
+
+    settings = get_settings()
+    private_key = settings.resolved_private_key
+    if not private_key or not settings.github_app_id or not settings.github_installation_id:
+        res = {"status": "unconfigured", "error": "GitHub credentials or private key (.pem) not configured."}
+        _github_status_cache["data"] = res
+        _github_status_cache["expires_at"] = now + 30.0
+        return res
+
+    try:
+        get_installation_token(
+            settings.github_app_id,
+            private_key,
+            settings.github_installation_id,
+        )
+        res = {"status": "healthy", "error": None}
+    except Exception as e:
+        res = {"status": "error", "error": str(e)}
+
+    _github_status_cache["data"] = res
+    _github_status_cache["expires_at"] = now + 30.0
+    return res
+
+
+@app.post("/api/dashboard/webhooks/test")
+async def trigger_test_webhook(request: Request):
+    _require_admin(request)
+    settings = get_settings()
+    payload = {
+        "action": "opened",
+        "pull_request": {
+            "number": 9999,
+            "head": {
+                "sha": "0000000000000000000000000000000000000000"
+            },
+            "title": "Aegis Webhook Handshake Verification Sandbox",
+            "body": "Verification mock PR payload."
+        },
+        "repository": {
+            "name": "aegis-sandbox-test",
+            "owner": {
+                "login": "aegis-auth"
+            }
+        }
+    }
+    body = json.dumps(payload).encode()
+    secret = settings.github_webhook_secret or ""
+    signature = "sha256=" + hmac.new(secret.encode(), body, hashlib.sha256).hexdigest()
+
+    # Resolve server's local webhook URL
+    base_url = f"{request.url.scheme}://{request.url.netloc}"
+
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url=base_url) as client:
+        try:
+            resp = await client.post(
+                "/webhook",
+                content=body,
+                headers={
+                    "X-Hub-Signature-256": signature,
+                    "X-GitHub-Event": "pull_request",
+                    "Content-Type": "application/json"
+                },
+                timeout=10.0
+            )
+            if resp.status_code != 200:
+                return {"success": False, "error": f"Webhook returned status {resp.status_code}: {resp.text}"}
+            return {"success": True, "data": resp.json()}
+        except Exception as e:
+            return {"success": False, "error": str(e)}
 
 
 @app.post("/webhook")
@@ -518,6 +682,15 @@ async def handle_webhook(
     pr_body = pr.get("body", "") or ""
 
     repo_key = f"{owner}/{repo_name}"
+    if repo_name == "aegis-sandbox-test":
+        _add_webhook_log(
+            repo_key,
+            x_github_event,
+            action,
+            "processed",
+            "Mock webhook sandbox delivery processed successfully."
+        )
+        return {"status": "processed", "reason": "sandbox handshake verified"}
     reviewable_actions = {"opened", "synchronize", "reopened", "ready_for_review"}
     if action == "closed":
         reason = "merged PR does not trigger review" if pr.get("merged") else "PR closed without merge"

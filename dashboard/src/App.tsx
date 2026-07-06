@@ -1,8 +1,8 @@
 import { Suspense, lazy, useEffect, useMemo, useRef, useState } from "react";
 import { api } from "./lib/api";
-import type { AuditEntry, AuthStatus, ConfigView, CostSummary, ReviewDetail, ReviewFeedItem, WebhookLog } from "./lib/types";
+import type { AuditEntry, AuthStatus, ConfigView, CostSummary, GitHubStatus, ReviewDetail, ReviewFeedItem, WebhookLog, ReviewInsights } from "./lib/types";
 
-type TabKey = "feed" | "detail" | "config" | "cost" | "webhooks" | "about" | "privacy";
+type TabKey = "feed" | "detail" | "config" | "cost" | "webhooks" | "about" | "privacy" | "how-to-use";
 
 const tabs: Array<{ key: TabKey; label: string }> = [
   { key: "feed", label: "Live Feed" },
@@ -26,7 +26,8 @@ const TAB_TITLES: Record<TabKey, string> = {
   cost: "Cost Tracker",
   webhooks: "Webhook Logs",
   about: "About Aegis",
-  privacy: "Privacy & Terms"
+  privacy: "Privacy & Terms",
+  "how-to-use": "How to use Aegis"
 };
 
 const PROVIDER_MODELS: Record<string, string[]> = {
@@ -54,6 +55,8 @@ export function App() {
   const [webhooks, setWebhooks] = useState<WebhookLog[]>([]);
   const [audit, setAudit] = useState<AuditEntry[]>([]);
   const [auth, setAuth] = useState<AuthStatus>({ authenticated: false });
+  const [githubStatus, setGitHubStatus] = useState<GitHubStatus | null>(null);
+  const [insights, setInsights] = useState<ReviewInsights | null>(null);
   const [saveError, setSaveError] = useState<string>("");
   const [loadError, setLoadError] = useState<string>("");
   const [userMenuOpen, setUserMenuOpen] = useState(false);
@@ -72,10 +75,94 @@ export function App() {
   const [lastDashboardTab, setLastDashboardTab] = useState<TabKey>("feed");
 
   useEffect(() => {
-    if (activeTab !== "about" && activeTab !== "privacy") {
+    if (activeTab !== "about" && activeTab !== "privacy" && activeTab !== "how-to-use") {
       setLastDashboardTab(activeTab);
     }
   }, [activeTab]);
+
+  const downloadBlob = (content: string, filename: string, contentType: string) => {
+    const blob = new Blob([content], { type: contentType });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.setAttribute("download", filename);
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
+  };
+
+  const exportWebhooksJSON = () => {
+    const jsonStr = JSON.stringify(webhooks, null, 2);
+    downloadBlob(jsonStr, "aegis_webhook_logs.json", "application/json");
+  };
+
+  const exportWebhooksCSV = () => {
+    const headers = ["ID", "Repository", "Event", "Action", "Status", "Reason", "Date"];
+    const rows = webhooks.map(w => [
+      w.id,
+      w.repo,
+      w.event,
+      w.action,
+      w.status,
+      w.reason || "",
+      new Date(w.created_at).toISOString()
+    ]);
+    const csvContent = [
+      headers.join(","),
+      ...rows.map(r => r.map(val => `"${val.replace(/"/g, '""')}"`).join(","))
+    ].join("\n");
+    downloadBlob(csvContent, "aegis_webhook_logs.csv", "text/csv;charset=utf-8;");
+  };
+
+  const exportCostJSON = () => {
+    if (!cost) return;
+    const jsonStr = JSON.stringify(cost, null, 2);
+    downloadBlob(jsonStr, "aegis_cost_telemetry.json", "application/json");
+  };
+
+  const exportCostCSV = () => {
+    if (!cost) return;
+    const headers = ["Date", "Token Usage", "Input Tokens", "Output Tokens", "Reviews Count", "Estimated Cost (USD)"];
+    const rows = cost.last_7_days.map(c => [
+      c.date,
+      c.token_usage,
+      c.input_tokens,
+      c.output_tokens,
+      c.reviews,
+      c.estimated_cost_usd
+    ]);
+    const csvContent = [
+      headers.join(","),
+      ...rows.map(r => r.join(","))
+    ].join("\n");
+    downloadBlob(csvContent, "aegis_cost_telemetry.csv", "text/csv;charset=utf-8;");
+  };
+
+  const [triggeringTest, setTriggeringTest] = useState(false);
+
+  const triggerTestWebhook = async () => {
+    setTriggeringTest(true);
+    try {
+      const resp = await api.triggerTestWebhook();
+      if (resp.success) {
+        let filterParams: { repo?: string; org?: string } = {};
+        if (filter.startsWith("org:")) {
+          filterParams = { org: filter.slice(4) };
+        } else if (filter.startsWith("repo:")) {
+          filterParams = { repo: filter.slice(5) };
+        }
+        const freshLogs = await api.getWebhooks(filterParams);
+        setWebhooks(freshLogs);
+      } else {
+        alert(`Sandbox delivery failed: ${resp.error}`);
+      }
+    } catch (e) {
+      alert(`Error triggering sandbox delivery: ${e instanceof Error ? e.message : String(e)}`);
+    } finally {
+      setTriggeringTest(false);
+    }
+  };
 
   useEffect(() => {
     let cancelled = false;
@@ -89,14 +176,16 @@ export function App() {
 
     const load = async () => {
       try {
-        const [r, c, s, w, a, authStatus, repos] = await Promise.all([
+        const [r, c, s, w, a, authStatus, repos, ghStatus, ins] = await Promise.all([
           api.getReviews(filterParams),
           api.getConfig(),
           api.getCost(filterParams),
           api.getWebhooks(filterParams),
           api.getAudit(),
           api.getAuthStatus(),
-          api.getRepositories()
+          api.getRepositories(),
+          api.getGitHubStatus(),
+          api.getInsights(filterParams)
         ]);
         if (cancelled) return;
 
@@ -108,6 +197,8 @@ export function App() {
         setAudit(a);
         setAuth(authStatus);
         setRepoList(repos);
+        setGitHubStatus(ghStatus);
+        setInsights(ins);
         setSelectedReviewId((current) => current ?? r[0]?.id ?? null);
       } catch (error) {
         if (cancelled) return;
@@ -145,7 +236,7 @@ export function App() {
   }, [userMenuOpen]);
 
   const maxTokens = useMemo(() => Math.max(...(cost?.last_7_days.map((d) => d.token_usage) ?? [1])), [cost]);
-  const isInfoPage = activeTab === "about" || activeTab === "privacy";
+  const isInfoPage = activeTab === "about" || activeTab === "privacy" || activeTab === "how-to-use";
   const shaderGradientProps = {
     animate: "on",
     axesHelper: "off",
@@ -287,9 +378,21 @@ export function App() {
           {auth.authenticated && auth.user ? (
             <div className="user-menu-container">
               <button className="user-chip-btn" onClick={() => setUserMenuOpen(!userMenuOpen)}>
-                {auth.user.avatar_url ? (
-                  <img className="user-avatar" src={auth.user.avatar_url} alt={auth.user.login} />
-                ) : null}
+                <div className="avatar-wrapper">
+                  {auth.user.avatar_url ? (
+                    <img className="user-avatar" src={auth.user.avatar_url} alt={auth.user.login} />
+                  ) : null}
+                  <div className={`handshake-dot handshake-${githubStatus?.status ?? "loading"}`} />
+                  <div className="handshake-tooltip">
+                    <span className="tooltip-title">GitHub Handshake</span>
+                    <span className="tooltip-desc">
+                      {githubStatus?.status === "healthy" && "Aegis is successfully authenticated with GitHub."}
+                      {githubStatus?.status === "unconfigured" && "GitHub App credentials not configured."}
+                      {githubStatus?.status === "error" && `Authentication failed: ${githubStatus.error}`}
+                      {!githubStatus && "Checking GitHub integration status..."}
+                    </span>
+                  </div>
+                </div>
                 <span className="user-name-role">
                   {auth.user.login.toLowerCase()}.{auth.user.role.toLowerCase()}
                 </span>
@@ -378,8 +481,24 @@ export function App() {
       {renderHeader()}
 
       {isInfoPage ? (
-        <section className="page-shell">
-          {renderVideoBackdrop()}
+        <section className={`page-shell ${activeTab === "how-to-use" ? "how-to-use-page-shell" : ""}`}>
+          {activeTab === "how-to-use" ? (
+            <div className="shader-bg" aria-hidden="true" style={{ position: "absolute", top: 0, left: 0, width: "100%", height: "100%", zIndex: 0 }}>
+              <Suspense
+                fallback={<div className="shader-loading">Loading visual gradient engine...</div>}
+              >
+                <ShaderGradientCanvas
+                  style={{ position: "absolute", top: 0, left: 0, width: "100%", height: "100%" }}
+                  fov={20}
+                  pointerEvents="none"
+                >
+                  <ShaderGradient {...(shaderGradientProps as any)} />
+                </ShaderGradientCanvas>
+              </Suspense>
+            </div>
+          ) : (
+            renderVideoBackdrop()
+          )}
           <div className="page-body">
             <section className="hero-copy info-hero-copy">
               <h1 className="tab-title">{TAB_TITLES[activeTab]}</h1>
@@ -451,6 +570,20 @@ export function App() {
                   </div>
                 </div>
               )}
+              {activeTab === "how-to-use" && (
+                <div className="panel how-to-use-panel">
+                  <div className="video-player-container">
+                    <iframe
+                      src="https://www.youtube.com/embed/dQw4w9WgXcQ"
+                      title="How to use Aegis"
+                      frameBorder="0"
+                      allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
+                      allowFullScreen
+                      className="youtube-iframe"
+                    ></iframe>
+                  </div>
+                </div>
+              )}
             </section>
           </div>
           {renderFooter()}
@@ -462,9 +595,14 @@ export function App() {
             <section className="hero-copy">
               <h1>Supercharged PR Intelligence</h1>
               <p>Aegis helps you automate code reviews, configure model behaviors, monitor token expenditures, and inspect system health in one cinematic console.</p>
-              <button type="button" className="scroll-down-btn" onClick={scrollToLower}>
-                scroll down
-              </button>
+              <div className="hero-actions">
+                <button type="button" className="scroll-down-btn" onClick={scrollToLower}>
+                  launch console
+                </button>
+                <button type="button" className="how-to-use-btn" onClick={() => setActiveTab("how-to-use")}>
+                  how to use
+                </button>
+              </div>
             </section>
             <div className="fade-layer" />
           </section>
@@ -542,6 +680,97 @@ export function App() {
                             <code>{loadError}</code>
                           </div>
                         )}
+                      </div>
+                    )}
+
+                    {reviews.length > 0 && insights && (
+                      <div className="insights-panel">
+                        <div className="insights-header">
+                          <h3>Code Quality Insights</h3>
+                          <span className="insights-sub">
+                            Based on {insights.total_comments} issues across {insights.total_reviews} {insights.total_reviews === 1 ? "review" : "reviews"}
+                          </span>
+                        </div>
+                        
+                        <div className="insights-grid">
+                          {/* Severity Distribution */}
+                          <div className="insights-card">
+                            <h4>Severity Distribution</h4>
+                            <div className="progress-group">
+                              <div className="progress-label">
+                                <span>Critical</span>
+                                <span>{insights.severity.critical}</span>
+                              </div>
+                              <div className="progress-bar-wrapper">
+                                <div className="progress-bar severity-critical" style={{ width: `${insights.total_comments > 0 ? (insights.severity.critical / insights.total_comments) * 100 : 0}%` }}></div>
+                              </div>
+                            </div>
+
+                            <div className="progress-group">
+                              <div className="progress-label">
+                                <span>Suggestion</span>
+                                <span>{insights.severity.suggestion}</span>
+                              </div>
+                              <div className="progress-bar-wrapper">
+                                <div className="progress-bar severity-suggestion" style={{ width: `${insights.total_comments > 0 ? (insights.severity.suggestion / insights.total_comments) * 100 : 0}%` }}></div>
+                              </div>
+                            </div>
+
+                            <div className="progress-group">
+                              <div className="progress-label">
+                                <span>Nit</span>
+                                <span>{insights.severity.nit}</span>
+                              </div>
+                              <div className="progress-bar-wrapper">
+                                <div className="progress-bar severity-nit" style={{ width: `${insights.total_comments > 0 ? (insights.severity.nit / insights.total_comments) * 100 : 0}%` }}></div>
+                              </div>
+                            </div>
+                          </div>
+
+                          {/* Category Breakdown */}
+                          <div className="insights-card">
+                            <h4>Category Breakdown</h4>
+                            <div className="progress-group">
+                              <div className="progress-label">
+                                <span>Security</span>
+                                <span>{insights.category.security}</span>
+                              </div>
+                              <div className="progress-bar-wrapper">
+                                <div className="progress-bar category-security" style={{ width: `${insights.total_comments > 0 ? (insights.category.security / insights.total_comments) * 100 : 0}%` }}></div>
+                              </div>
+                            </div>
+
+                            <div className="progress-group">
+                              <div className="progress-label">
+                                <span>Performance</span>
+                                <span>{insights.category.performance}</span>
+                              </div>
+                              <div className="progress-bar-wrapper">
+                                <div className="progress-bar category-performance" style={{ width: `${insights.total_comments > 0 ? (insights.category.performance / insights.total_comments) * 100 : 0}%` }}></div>
+                              </div>
+                            </div>
+
+                            <div className="progress-group">
+                              <div className="progress-label">
+                                <span>Logic</span>
+                                <span>{insights.category.logic}</span>
+                              </div>
+                              <div className="progress-bar-wrapper">
+                                <div className="progress-bar category-logic" style={{ width: `${insights.total_comments > 0 ? (insights.category.logic / insights.total_comments) * 100 : 0}%` }}></div>
+                              </div>
+                            </div>
+
+                            <div className="progress-group">
+                              <div className="progress-label">
+                                <span>Style</span>
+                                <span>{insights.category.style}</span>
+                              </div>
+                              <div className="progress-bar-wrapper">
+                                <div className="progress-bar category-style" style={{ width: `${insights.total_comments > 0 ? (insights.category.style / insights.total_comments) * 100 : 0}%` }}></div>
+                              </div>
+                            </div>
+                          </div>
+                        </div>
                       </div>
                     )}
 
@@ -735,7 +964,8 @@ export function App() {
                               diff_token_limit: config.diff_token_limit,
                               rate_limit_window_seconds: config.rate_limit_window_seconds,
                               rate_limit_max_reviews: config.rate_limit_max_reviews,
-                              monthly_budget_cap: config.monthly_budget_cap
+                              monthly_budget_cap: config.monthly_budget_cap,
+                              custom_system_prompt: config.custom_system_prompt
                             };
                             if (apiKeyInput.trim()) {
                               Object.assign(updatePayload, { llm_api_key: apiKeyInput.trim() });
@@ -1080,6 +1310,33 @@ export function App() {
                           </div>
                         </div>
                       </div>
+
+                      {/* Card 6: Custom System Prompt */}
+                      <div className="config-card full-width">
+                        <h3 className="config-card-title">
+                          <svg className="menu-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                            <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
+                            <polyline points="14 2 14 8 20 8" />
+                            <line x1="16" y1="13" x2="8" y2="13" />
+                            <line x1="16" y1="17" x2="8" y2="17" />
+                            <polyline points="10 9 9 9 8 9" />
+                          </svg>
+                          Custom System Prompt
+                        </h3>
+                        <p className="config-help-text">
+                          Provide custom guidelines or review instructions for the AI review engine. If left empty, Aegis falls back to the default review prompts (checking security, logic, style, and correctness).
+                        </p>
+                        <div className="config-field" style={{ display: "flex", flexDirection: "column", gap: "0.5rem" }}>
+                          <textarea
+                            className="config-textarea"
+                            placeholder="Enter custom AI system instructions (e.g. Focus heavily on TypeScript strict types and memory management)..."
+                            value={config.custom_system_prompt}
+                            onChange={(e) => setConfig({ ...config, custom_system_prompt: e.target.value })}
+                            disabled={auth.user?.role !== "admin"}
+                            rows={8}
+                          />
+                        </div>
+                      </div>
                     </div>
 
                     {/* Audit Log Section */}
@@ -1126,7 +1383,16 @@ export function App() {
 
                 {activeTab === "cost" && cost && (
                   <div className="panel cost-panel-redesign">
-                    <h2>Cost Tracker</h2>
+                    <div className="panel-header-with-actions" style={{ justifyContent: "flex-end" }}>
+                      <div className="panel-actions">
+                        <button className="secondary-action-btn" onClick={exportCostCSV}>
+                          Export CSV
+                        </button>
+                        <button className="secondary-action-btn" onClick={exportCostJSON}>
+                          Export JSON
+                        </button>
+                      </div>
+                    </div>
                     <div className="cost-cards">
                       <div className="cost-card">
                         <span className="cost-card-label">Total Spend (7d)</span>
@@ -1145,35 +1411,73 @@ export function App() {
                       </div>
                     </div>
 
-                    <div className="chart-container">
-                      {/* Background grid lines to give the chart visual substance */}
-                      <div className="chart-grid-lines">
-                        <div className="grid-line"><span>{maxTokens.toLocaleString()}</span></div>
-                        <div className="grid-line"><span>{Math.round(maxTokens / 2).toLocaleString()}</span></div>
-                        <div className="grid-line"><span>0</span></div>
+                    <div className="cost-dashboard-layout">
+                      <div className="chart-section">
+                        <div className="chart-container">
+                          {/* Background grid lines to give the chart visual substance */}
+                          <div className="chart-grid-lines">
+                            <div className="grid-line"><span>{maxTokens.toLocaleString()}</span></div>
+                            <div className="grid-line"><span>{Math.round(maxTokens / 2).toLocaleString()}</span></div>
+                            <div className="grid-line"><span>0</span></div>
+                          </div>
+
+                          <div className="chart-bars">
+                            {cost.last_7_days.map((day) => {
+                              const percent = maxTokens > 0 ? (day.token_usage / maxTokens) * 100 : 0;
+                              return (
+                                <div key={day.date} className="chart-bar-col">
+                                  <div className="chart-bar-wrapper">
+                                    <div
+                                      className="chart-bar"
+                                      style={{ height: `${percent}%` }}
+                                    >
+                                      <div className="chart-bar-tooltip">
+                                        <div className="tooltip-date">{day.date}</div>
+                                        <div className="tooltip-value">{day.token_usage.toLocaleString()} tokens</div>
+                                        <div className="tooltip-cost">${(day.token_usage * 0.000002).toFixed(4)} est.</div>
+                                      </div>
+                                    </div>
+                                  </div>
+                                  <span className="chart-bar-date">{day.date.slice(5)}</span>
+                                </div>
+                              );
+                            })}
+                          </div>
+                        </div>
                       </div>
 
-                      <div className="chart-bars">
-                        {cost.last_7_days.map((day) => {
-                          const percent = maxTokens > 0 ? (day.token_usage / maxTokens) * 100 : 0;
-                          return (
-                            <div key={day.date} className="chart-bar-col">
-                              <div className="chart-bar-wrapper">
-                                <div
-                                  className="chart-bar"
-                                  style={{ height: `${percent}%` }}
-                                >
-                                  <div className="chart-bar-tooltip">
-                                    <div className="tooltip-date">{day.date}</div>
-                                    <div className="tooltip-value">{day.token_usage.toLocaleString()} tokens</div>
-                                    <div className="tooltip-cost">${(day.token_usage * 0.000002).toFixed(4)} est.</div>
-                                  </div>
-                                </div>
-                              </div>
-                              <span className="chart-bar-date">{day.date.slice(5)}</span>
-                            </div>
-                          );
-                        })}
+                      <div className="breakdown-section">
+                        <h3>Repository Cost Share</h3>
+                        <div className="breakdown-table-wrapper">
+                          {!cost.breakdown || cost.breakdown.length === 0 ? (
+                            <div className="empty-breakdown">No telemetry data recorded.</div>
+                          ) : (
+                            <table className="breakdown-table">
+                              <thead>
+                                <tr>
+                                  <th>Repository</th>
+                                  <th>Reviews</th>
+                                  <th>Tokens</th>
+                                  <th>Spend</th>
+                                </tr>
+                              </thead>
+                              <tbody>
+                                {cost.breakdown.map((item) => (
+                                  <tr key={item.repo_name}>
+                                    <td className="repo-name-cell" title={item.repo_name}>
+                                      {item.repo_name}
+                                    </td>
+                                    <td>{item.reviews}</td>
+                                    <td>{item.token_usage.toLocaleString()}</td>
+                                    <td className="spend-cell">
+                                      ${item.estimated_cost_usd.toFixed(2)}
+                                    </td>
+                                  </tr>
+                                ))}
+                              </tbody>
+                            </table>
+                          )}
+                        </div>
                       </div>
                     </div>
                   </div>
@@ -1181,6 +1485,30 @@ export function App() {
 
                 {activeTab === "webhooks" && (
                   <div className="panel">
+                    <div className="panel-header-with-actions" style={{ justifyContent: "flex-end" }}>
+                      <div className="panel-actions">
+                        {auth.authenticated && (
+                          <button
+                            className="secondary-action-btn sandbox-btn"
+                            onClick={triggerTestWebhook}
+                            disabled={triggeringTest}
+                          >
+                            {triggeringTest ? "Delivering..." : "Trigger Test Delivery"}
+                          </button>
+                        )}
+                        {webhooks.length > 0 && (
+                          <>
+                            <button className="secondary-action-btn" onClick={exportWebhooksCSV}>
+                              Export CSV
+                            </button>
+                            <button className="secondary-action-btn" onClick={exportWebhooksJSON}>
+                              Export JSON
+                            </button>
+                          </>
+                        )}
+                      </div>
+                    </div>
+
                     {webhooks.length === 0 ? (
                       <div className="empty-feed-card">
                         {!auth.authenticated ? (
@@ -1228,19 +1556,16 @@ export function App() {
                         )}
                       </div>
                     ) : (
-                      <>
-                        <h2>Webhook Logs</h2>
-                        <div className="stack">
-                          {webhooks.map((log) => (
-                            <div key={log.id} className="log-row">
-                              <strong>{log.repo}</strong>
-                              <span>{log.event}/{log.action}</span>
-                              <span className={log.status === "processed" ? "ok" : "bad"}>{log.status}</span>
-                              <span>{log.reason ?? "-"}</span>
-                            </div>
-                          ))}
-                        </div>
-                      </>
+                      <div className="stack">
+                        {webhooks.map((log) => (
+                          <div key={log.id} className="log-row">
+                            <strong>{log.repo}</strong>
+                            <span>{log.event}/{log.action}</span>
+                            <span className={log.status === "processed" ? "ok" : "bad"}>{log.status}</span>
+                            <span>{log.reason ?? "-"}</span>
+                          </div>
+                        ))}
+                      </div>
                     )}
                   </div>
                 )}

@@ -260,3 +260,51 @@ class TestKeyFailover:
         assert primary["status"] == "cooldown"
         assert primary["last_error_status"] == 429
         assert backup["status"] == "healthy"
+
+
+class TestCustomSystemPrompt:
+    """Test that custom system prompts from settings override the default code_review.txt prompt."""
+
+    @patch("app.review_engine.call_llm")
+    def test_custom_prompt_loaded(self, mock_call_llm):
+        from app.review_engine import review_diff
+        mock_call_llm.return_value = ({"verdict": "looks-good", "summary": "ok", "comments": []}, TokenUsage(1, 1))
+
+        settings = Settings(
+            llm_provider="openai",
+            llm_api_key="test-key",
+            custom_system_prompt="My custom guidelines focusing on TS strictness.",
+        )
+
+        asyncio.run(review_diff(
+            annotated_diff="diff",
+            pr_title="PR Title",
+            pr_body="PR Body",
+            settings=settings
+        ))
+
+        # Check call_llm system_prompt argument
+        system_prompt_arg = mock_call_llm.call_args[0][0]
+        assert system_prompt_arg == "My custom guidelines focusing on TS strictness."
+
+    @patch("app.review_engine.call_llm")
+    def test_default_prompt_loaded_when_custom_empty(self, mock_call_llm):
+        from app.review_engine import review_diff
+        mock_call_llm.return_value = ({"verdict": "looks-good", "summary": "ok", "comments": []}, TokenUsage(1, 1))
+
+        settings = Settings(
+            llm_provider="openai",
+            llm_api_key="test-key",
+            custom_system_prompt="",
+        )
+
+        asyncio.run(review_diff(
+            annotated_diff="diff",
+            pr_title="PR Title",
+            pr_body="PR Body",
+            settings=settings
+        ))
+
+        system_prompt_arg = mock_call_llm.call_args[0][0]
+        assert "critical" in system_prompt_arg
+        assert len(system_prompt_arg) > 100

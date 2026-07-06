@@ -1,4 +1,4 @@
-import type { AuditEntry, AuthStatus, ConfigView, CostSummary, ReviewDetail, ReviewFeedItem, WebhookLog } from "./types";
+import type { AuditEntry, AuthStatus, ConfigView, CostSummary, GitHubStatus, ReviewDetail, ReviewFeedItem, WebhookLog, ReviewInsights } from "./types";
 
 const BASE_URL = import.meta.env.VITE_API_URL || "";
 
@@ -53,7 +53,23 @@ export const api = {
     }
     return response.json() as Promise<ConfigView>;
   },
+  getInsights: (filters?: { repo?: string; org?: string }) => {
+    const params = new URLSearchParams();
+    if (filters?.repo) params.append("repo", filters.repo);
+    if (filters?.org) params.append("org", filters.org);
+    return get<ReviewInsights>(`/api/dashboard/insights?${params.toString()}`);
+  },
   getAuthStatus: () => get<AuthStatus>(`/auth/status`),
+  getGitHubStatus: () => get<GitHubStatus>("/api/dashboard/github-status"),
+  triggerTestWebhook: () => {
+    return fetch(`${BASE_URL}/api/dashboard/webhooks/test`, {
+      method: "POST",
+      credentials: "include"
+    }).then(res => {
+      if (!res.ok) throw new Error(`Test webhook request failed: ${res.status}`);
+      return res.json() as Promise<{ success: boolean; error?: string; data?: any }>;
+    });
+  },
   logout: async () => {
     const response = await fetch(`${BASE_URL}/auth/logout`, {
       method: "POST",
