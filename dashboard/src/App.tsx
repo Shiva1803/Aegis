@@ -1,8 +1,9 @@
 import { Suspense, lazy, useEffect, useMemo, useRef, useState } from "react";
 import { api } from "./lib/api";
 import type { AuditEntry, AuthStatus, ConfigView, CostSummary, GitHubStatus, ReviewDetail, ReviewFeedItem, WebhookLog, ReviewInsights } from "./lib/types";
+import GlareHover from "./components/GlareHover";
 
-type TabKey = "feed" | "detail" | "config" | "cost" | "webhooks" | "about" | "privacy" | "how-to-use";
+type TabKey = "feed" | "detail" | "config" | "cost" | "webhooks" | "about" | "privacy" | "how-to-use" | "changelog";
 
 const tabs: Array<{ key: TabKey; label: string }> = [
   { key: "feed", label: "Live Feed" },
@@ -27,7 +28,8 @@ const TAB_TITLES: Record<TabKey, string> = {
   webhooks: "Webhook Logs",
   about: "About Aegis",
   privacy: "Privacy & Terms",
-  "how-to-use": "How to use Aegis"
+  "how-to-use": "How to use Aegis",
+  changelog: "Aegis Changelog"
 };
 
 const PROVIDER_MODELS: Record<string, string[]> = {
@@ -75,7 +77,7 @@ export function App() {
   const [lastDashboardTab, setLastDashboardTab] = useState<TabKey>("feed");
 
   useEffect(() => {
-    if (activeTab !== "about" && activeTab !== "privacy" && activeTab !== "how-to-use") {
+    if (activeTab !== "about" && activeTab !== "privacy" && activeTab !== "how-to-use" && activeTab !== "changelog") {
       setLastDashboardTab(activeTab);
     }
   }, [activeTab]);
@@ -236,7 +238,7 @@ export function App() {
   }, [userMenuOpen]);
 
   const maxTokens = useMemo(() => Math.max(...(cost?.last_7_days.map((d) => d.token_usage) ?? [1])), [cost]);
-  const isInfoPage = activeTab === "about" || activeTab === "privacy" || activeTab === "how-to-use";
+  const isInfoPage = activeTab === "about" || activeTab === "privacy" || activeTab === "how-to-use" || activeTab === "changelog";
   const shaderGradientProps = {
     animate: "on",
     axesHelper: "off",
@@ -317,10 +319,10 @@ export function App() {
   const renderHeader = () => (
     <header className="top-nav">
       <div className="top-nav-left">
-        <div className="logo-container">
-          <img src="/Gemini_Generated_Image_fxx9lqfxx9lqfxx9.png" alt="Aegis Logo" className="logo-img" />
+        <div className="logo-container" onClick={() => setActiveTab("about")}>
+          <img src="/Gemini_Generated_Image_fxx9lqfxx9lqfxx9-removebg-preview.png" alt="Aegis Logo" className="logo-img" />
           <span className="logo-text">Aegis</span>
-          <span className="logo-version">v2.1</span>
+          <span className="logo-version">v2.5</span>
         </div>
         {!isInfoPage && (
           <div className="filter-container">
@@ -456,6 +458,14 @@ export function App() {
           About Aegis
         </a>
         <span className="footer-separator">|</span>
+        <a href="#" onClick={(event) => { event.preventDefault(); setActiveTab("changelog"); }} className="about-link">
+          <svg className="menu-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <path d="M12 8v4l3 3" />
+            <path d="M3.05 11a9 9 0 1 1 .5 4m-.5 5v-5h5" />
+          </svg>
+          Changelog
+        </a>
+        <span className="footer-separator">|</span>
         <a href="#" onClick={(event) => { event.preventDefault(); setActiveTab("privacy"); }} className="about-link">
           <svg className="menu-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
             <rect x="3" y="11" width="18" height="11" rx="2" ry="2" />
@@ -501,7 +511,44 @@ export function App() {
           )}
           <div className="page-body">
             <section className="hero-copy info-hero-copy">
-              <h1 className="tab-title">{TAB_TITLES[activeTab]}</h1>
+              {activeTab === "about" ? (
+                <div style={{
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  gap: "1.25rem",
+                  margin: "1rem auto 0",
+                  width: "fit-content"
+                }}>
+                  <GlareHover
+                    glareColor="#ffffff"
+                    glareOpacity={0.3}
+                    glareAngle={-30}
+                    glareSize={300}
+                    transitionDuration={800}
+                    playOnce={false}
+                    width="auto"
+                    height="auto"
+                    borderRadius="12px"
+                    borderColor="transparent"
+                    background="transparent"
+                  >
+                    <img
+                      src="/Gemini_Generated_Image_fxx9lqfxx9lqfxx9-removebg-preview.png"
+                      alt="Aegis Logo"
+                      style={{
+                        height: "clamp(2.6rem, 8vw, 6.5rem)",
+                        width: "auto",
+                        display: "block",
+                        borderRadius: "12px"
+                      }}
+                    />
+                  </GlareHover>
+                  <h1 className="tab-title" style={{ margin: 0 }}>{TAB_TITLES[activeTab]}</h1>
+                </div>
+              ) : (
+                <h1 className="tab-title">{TAB_TITLES[activeTab]}</h1>
+              )}
             </section>
             <section className="glass-stage">
               {activeTab === "about" && (
@@ -532,9 +579,144 @@ export function App() {
                     <p className="about-paragraph">
                       To activate automated code reviews, configure your GitHub App or Repository settings to send Webhook deliveries to the Aegis server gateway URL. Ensure you have provided a valid API key for your chosen provider (NVIDIA NIM, Groq, OpenAI, Anthropic, or Gemini) in the Configuration panel. Once set up, Aegis will handle the rest autonomously.
                     </p>
-                    <div className="about-meta-info">
-                      <div>Aegis: v 2.1</div>
-                      <div>Last updated: 6 Jul 2026</div>
+                  </div>
+
+                  <div className="about-section">
+                    <h2 className="about-heading">What's New & Changelog</h2>
+                    <div className="changelog-container" style={{ display: "flex", flexDirection: "column", gap: "1.25rem", marginTop: "1rem" }}>
+                      <div className="changelog-item">
+                        <div style={{ display: "flex", alignItems: "center", gap: "0.75rem", marginBottom: "0.4rem" }}>
+                          <span style={{ background: "rgba(251, 191, 36, 0.15)", color: "#fbbf24", padding: "0.2rem 0.6rem", borderRadius: "999px", fontSize: "0.75rem", fontWeight: 700 }}>v2.5</span>
+                          <span style={{ fontSize: "0.75rem", color: "rgba(236, 241, 255, 0.45)" }}>July 8, 2026</span>
+                        </div>
+                        <ul className="changelog-list" style={{ margin: 0, paddingLeft: "1.2rem", fontSize: "0.9rem", color: "rgba(236, 241, 255, 0.8)", lineHeight: "1.5" }}>
+                          <li>Refactored Review Detail panel hierarchy, removing redundant subheadings.</li>
+                          <li>Styled pull request titles with high-contrast, clean sans-serif typography.</li>
+                          <li>Added direct application installation portals to the <strong>How to Use</strong> instructions.</li>
+                          <li>Configured custom high-fidelity favicon using background-removed branding.</li>
+                        </ul>
+                      </div>
+                    </div>
+
+                    <div style={{ marginTop: "1.25rem" }}>
+                      <button 
+                        type="button" 
+                        onClick={() => setActiveTab("changelog")} 
+                        className="install-button"
+                      >
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" style={{ display: "block" }}>
+                          <path d="M12 8v4l3 3" />
+                          <path d="M3.05 11a9 9 0 1 1 .5 4m-.5 5v-5h5" />
+                        </svg>
+                        <span>View All Changelogs</span>
+                      </button>
+                    </div>
+
+                    <div style={{
+                      display: "flex",
+                      justifyContent: "space-between",
+                      alignItems: "flex-end",
+                      marginTop: "2rem"
+                    }}>
+                      <a
+                        href="https://github.com/apps/aegis-pr-signal-app"
+                        target="_blank"
+                        rel="noreferrer"
+                        className="install-button"
+                      >
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" style={{ display: "block" }}>
+                          <path d="M9 19c-5 1.5-5-2.5-7-3m14 6v-3.87a3.37 3.37 0 0 0-.94-2.61c3.14-.35 6.44-1.54 6.44-7A5.44 5.44 0 0 0 20 4.77 5.07 5.07 0 0 0 19.91 1S18.73.65 16 2.48a13.38 13.38 0 0 0-7 0C6.27.65 5.09 1 5.09 1A5.07 5.07 0 0 0 5 4.77a5.44 5.44 0 0 0-1.5 3.78c0 5.42 3.3 6.61 6.44 7A3.37 3.37 0 0 0 9 18.13V22" />
+                        </svg>
+                        <span>Install Aegis App</span>
+                      </a>
+                      <div className="about-meta-info" style={{ marginTop: 0 }}>
+                        <div>Aegis: v 2.5</div>
+                        <div>Last updated: July 8, 2026</div>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {activeTab === "changelog" && (
+                <div className="panel about-panel">
+                  <div className="about-section">
+                    <h2 className="about-heading">Complete Changelog History</h2>
+                    <div className="changelog-container" style={{ display: "flex", flexDirection: "column", gap: "1.25rem", marginTop: "1rem" }}>
+                      <div className="changelog-item">
+                        <div style={{ display: "flex", alignItems: "center", gap: "0.75rem", marginBottom: "0.4rem" }}>
+                          <span style={{ background: "rgba(251, 191, 36, 0.15)", color: "#fbbf24", padding: "0.2rem 0.6rem", borderRadius: "999px", fontSize: "0.75rem", fontWeight: 700 }}>v2.5</span>
+                          <span style={{ fontSize: "0.75rem", color: "rgba(236, 241, 255, 0.45)" }}>July 8, 2026</span>
+                        </div>
+                        <ul className="changelog-list" style={{ margin: 0, paddingLeft: "1.2rem", fontSize: "0.9rem", color: "rgba(236, 241, 255, 0.8)", lineHeight: "1.5" }}>
+                          <li>Refactored Review Detail panel hierarchy, removing redundant subheadings.</li>
+                          <li>Styled pull request titles with high-contrast, clean sans-serif typography.</li>
+                          <li>Added direct application installation portals to the <strong>How to Use</strong> instructions.</li>
+                          <li>Configured custom high-fidelity favicon using background-removed branding.</li>
+                        </ul>
+                      </div>
+
+                      <div className="changelog-item">
+                        <div style={{ display: "flex", alignItems: "center", gap: "0.75rem", marginBottom: "0.4rem" }}>
+                          <span style={{ background: "rgba(255, 255, 255, 0.08)", color: "#ffffff", padding: "0.2rem 0.6rem", borderRadius: "999px", fontSize: "0.75rem", fontWeight: 700 }}>v2.1</span>
+                          <span style={{ fontSize: "0.75rem", color: "rgba(236, 241, 255, 0.45)" }}>July 6, 2026</span>
+                        </div>
+                        <ul className="changelog-list" style={{ margin: 0, paddingLeft: "1.2rem", fontSize: "0.9rem", color: "rgba(236, 241, 255, 0.8)", lineHeight: "1.5" }}>
+                          <li>Integrated high-performance background-removed brand assets.</li>
+                          <li>Added interactive <strong>GlareHover</strong> visual mechanics on the core brand mark.</li>
+                          <li>Implemented header logo click-to-about navigation.</li>
+                          <li>Added direct GitHub App installation links to informational pages.</li>
+                        </ul>
+                      </div>
+
+                      <div className="changelog-item">
+                        <div style={{ display: "flex", alignItems: "center", gap: "0.75rem", marginBottom: "0.4rem" }}>
+                          <span style={{ background: "rgba(255, 255, 255, 0.08)", color: "#ffffff", padding: "0.2rem 0.6rem", borderRadius: "999px", fontSize: "0.75rem", fontWeight: 700 }}>v2.0</span>
+                          <span style={{ fontSize: "0.75rem", color: "rgba(236, 241, 255, 0.45)" }}>June 25, 2026</span>
+                        </div>
+                        <ul className="changelog-list" style={{ margin: 0, paddingLeft: "1.2rem", fontSize: "0.9rem", color: "rgba(236, 241, 255, 0.8)", lineHeight: "1.5" }}>
+                          <li>Rebuilt Command Center UI with React + Vite and cinematic background systems.</li>
+                          <li>Introduced 7-day token cost telemetry charts and metrics.</li>
+                          <li>Built <strong>Key Roulette</strong> round-robin API key load distribution.</li>
+                          <li>Created Live review timeline feeds and real-time webhook inspection grids.</li>
+                        </ul>
+                      </div>
+
+                      <div className="changelog-item">
+                        <div style={{ display: "flex", alignItems: "center", gap: "0.75rem", marginBottom: "0.4rem" }}>
+                          <span style={{ background: "rgba(255, 255, 255, 0.08)", color: "#ffffff", padding: "0.2rem 0.6rem", borderRadius: "999px", fontSize: "0.75rem", fontWeight: 700 }}>v1.0</span>
+                          <span style={{ fontSize: "0.75rem", color: "rgba(236, 241, 255, 0.45)" }}>May 14, 2026</span>
+                        </div>
+                        <ul className="changelog-list" style={{ margin: 0, paddingLeft: "1.2rem", fontSize: "0.9rem", color: "rgba(236, 241, 255, 0.8)", lineHeight: "1.5" }}>
+                          <li>Initial launch of the FastAPI backend gateway integration.</li>
+                          <li>Implemented core PR code-diff retrieval and semantic inspection logic.</li>
+                          <li>Added multi-provider support for Claude, OpenAI, Gemini, Groq, and NVIDIA NIM models.</li>
+                          <li>Automated inline markdown reviews and needs-work / looks-good labeling.</li>
+                        </ul>
+                      </div>
+                    </div>
+
+                    <div style={{
+                      display: "flex",
+                      justifyContent: "space-between",
+                      alignItems: "flex-end",
+                      marginTop: "2.5rem"
+                    }}>
+                      <a
+                        href="https://github.com/apps/aegis-pr-signal-app"
+                        target="_blank"
+                        rel="noreferrer"
+                        className="install-button"
+                      >
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" style={{ display: "block" }}>
+                          <path d="M9 19c-5 1.5-5-2.5-7-3m14 6v-3.87a3.37 3.37 0 0 0-.94-2.61c3.14-.35 6.44-1.54 6.44-7A5.44 5.44 0 0 0 20 4.77 5.07 5.07 0 0 0 19.91 1S18.73.65 16 2.48a13.38 13.38 0 0 0-7 0C6.27.65 5.09 1 5.09 1A5.07 5.07 0 0 0 5 4.77a5.44 5.44 0 0 0-1.5 3.78c0 5.42 3.3 6.61 6.44 7A3.37 3.37 0 0 0 9 18.13V22" />
+                        </svg>
+                        <span>Install Aegis App</span>
+                      </a>
+                      <div className="about-meta-info" style={{ marginTop: 0 }}>
+                        <div>Aegis: v 2.5</div>
+                        <div>Last updated: July 8, 2026</div>
+                      </div>
                     </div>
                   </div>
                 </div>
@@ -582,6 +764,18 @@ export function App() {
                       className="youtube-iframe"
                     ></iframe>
                   </div>
+                  <a
+                    href="https://github.com/apps/aegis-pr-signal-app"
+                    target="_blank"
+                    rel="noreferrer"
+                    className="install-button"
+                    style={{ marginTop: "0.5rem" }}
+                  >
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" style={{ display: "block" }}>
+                      <path d="M9 19c-5 1.5-5-2.5-7-3m14 6v-3.87a3.37 3.37 0 0 0-.94-2.61c3.14-.35 6.44-1.54 6.44-7A5.44 5.44 0 0 0 20 4.77 5.07 5.07 0 0 0 19.91 1S18.73.65 16 2.48a13.38 13.38 0 0 0-7 0C6.27.65 5.09 1 5.09 1A5.07 5.07 0 0 0 5 4.77a5.44 5.44 0 0 0-1.5 3.78c0 5.42 3.3 6.61 6.44 7A3.37 3.37 0 0 0 9 18.13V22" />
+                    </svg>
+                    <span>Install Aegis App</span>
+                  </a>
                 </div>
               )}
             </section>
@@ -691,7 +885,7 @@ export function App() {
                             Based on {insights.total_comments} issues across {insights.total_reviews} {insights.total_reviews === 1 ? "review" : "reviews"}
                           </span>
                         </div>
-                        
+
                         <div className="insights-grid">
                           {/* Severity Distribution */}
                           <div className="insights-card">
@@ -841,7 +1035,6 @@ export function App() {
                   <div className="panel review-detail-panel">
                     {detail ? (
                       <>
-                        <h2 className="detail-page-title">Review Detail View</h2>
                         <h3 className="detail-subject">{detail.pull_request_title}</h3>
 
                         {/* AI Summary Block */}

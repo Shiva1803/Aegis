@@ -1197,14 +1197,14 @@ input {
 }
 
 .detail-subject {
-  font-family: "Cormorant Garamond", serif;
-  font-size: 1.4rem;
-  font-weight: 500;
-  font-style: italic;
-  color: rgba(236, 241, 255, 0.75);
-  margin: 0 0 1.25rem 0;
-  letter-spacing: 0.01em;
-  line-height: 1.35;
+  font-family: "Manrope", sans-serif;
+  font-size: 1.95rem;
+  font-weight: 800;
+  font-style: normal;
+  color: #ffffff;
+  margin: 0.5rem 0 1.25rem 0;
+  letter-spacing: -0.02em;
+  line-height: 1.25;
 }
 
 /* AI Summary Block */
@@ -1667,6 +1667,29 @@ input {
   line-height: 1.4;
   color: rgba(236, 241, 255, 0.45);
   margin-top: 1.25rem;
+}
+
+.install-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  background: linear-gradient(135deg, rgba(111, 174, 216, 0.22) 0%, rgba(31, 63, 99, 0.35) 100%) !important;
+  color: #ffffff !important;
+  padding: 0.5rem 1.15rem;
+  border-radius: 999px;
+  font-family: "Manrope", sans-serif;
+  font-size: 0.82rem;
+  font-weight: 700;
+  text-decoration: none !important;
+  box-shadow: 0 4px 15px rgba(111, 174, 216, 0.15);
+  transition: all 0.25s cubic-bezier(0.16, 1, 0.3, 1);
+  border: 1px solid rgba(111, 174, 216, 0.45) !important;
+}
+
+.install-button:hover {
+  background: linear-gradient(135deg, rgba(111, 174, 216, 0.32) 0%, rgba(31, 63, 99, 0.5) 100%) !important;
+  border-color: rgba(111, 174, 216, 0.75) !important;
+  box-shadow: 0 6px 20px rgba(111, 174, 216, 0.35);
 }
 
 /* ==========================================
